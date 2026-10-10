@@ -58,3 +58,7 @@ Gateは対象フェーズ/Featureの一致、レビュー、マージ先main、�
 6. Implementation: 実装・検証・修正・セルフレビュー後にDraft PRを提示する。マージは人間に委ねる。
 
 [Spec Kit公式](https://github.com/github/spec-kit)のエージェントスキル呼び出しと、セットアップ用の`specify` CLIは別の境界として扱います。スキル名をOSコマンドとして直接実行しません。連携バージョンとエージェントごとの呼び出し形式は実アダプター導入時に固定します。
+
+## 設計ドキュメント
+
+- [クラス・インターフェース概説](docs/architecture.md)
