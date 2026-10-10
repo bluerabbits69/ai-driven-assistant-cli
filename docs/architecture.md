@@ -1,6 +1,6 @@
 # CLIのクラス・インターフェース概説
 
-現時点のMVPは、1つのクラスと、CLI処理を担う関数、将来の外部連携に向けたインターフェースで構成されています。この文書は現在の実装と拡張予定を区別して説明します。
+現時点のMVPは、2つのクラスと、CLI処理を担う関数、将来の外部連携に向けたインターフェースで構成されています。この文書は現在の実装と拡張予定を区別して説明します。
 
 ## ファイル構成
 
@@ -9,6 +9,7 @@
 | `src/cli.ts` | 実行入口。依存を組み立て、引数と出力先を`run()`に渡し、終了コードを設定する |
 | `src/app.ts` | コマンドの入力検証と振り分け |
 | `src/gate.ts` | 前工程の承認を確認するための契約と共通判定 |
+| `src/init.ts` | ローカル初期化の契約と下書き生成 |
 | `src/ports.ts` | worktree・Spec Kit・PR連携に向けた契約とデータ型 |
 | `tests/cli.test.mjs` | 入力検証、Gate条件、フェーズ対応、実行入口の基本テスト |
 
@@ -28,6 +29,13 @@ classDiagram
         <<module>>
         parseCommand(args) Command
         run(args, gate, output) Promise~number~
+    }
+    class Initializer {
+        <<interface>>
+        initialize(root, mode) Promise
+    }
+    class LocalInitializer {
+        initialize(root, mode) Promise
     }
     class WorkflowGate {
         <<interface>>
@@ -64,6 +72,9 @@ classDiagram
         out(message) void
         error(message) void
     }
+    CliEntry ..> LocalInitializer : creates and injects
+    CommandFunctions ..> Initializer : calls initialize
+    LocalInitializer ..|> Initializer : implements
     CliEntry ..> CommandFunctions : calls run
     CliEntry ..> ReviewMergeGate : creates
     CliEntry ..> StubApprovalReader : creates and injects
@@ -140,6 +151,12 @@ classDiagram
 
 ## クラスとインターフェース
 
+### LocalInitializer（実装済みのクラス）
+
+`Initializer.initialize(root, mode)`を実装し、ルート直下の既知マニフェストと既存Constitutionの有無を確認して、`.dev-assistant/init`にローカル下書きを作成します。既存出力は上書きしません。AI生成・Spec Kit連携・Git操作・承認は担当しません。
+
+`Initializer`と`InitResult`も`src/init.ts`で定義しています。`run()`は任意の第4引数として`{ initializer, root }`を受け取り、CLI入口では`LocalInitializer`と`process.cwd()`を渡します。注入されていない場合は従来の未実装表示と終了コード2を維持します。
+
 ### ReviewMergeGate（実装済みのクラス）
 
 `WorkflowGate`を実装し、次のフェーズを開始できるか判定します。コンストラクターで`ApprovalReader`を受け取るため、承認情報の取得方法を判定ロジックから分離できます。
@@ -205,9 +222,9 @@ classDiagram
 
 `parseCommand()`は引数を検証し、`Command`を返します。不明なコマンド、必須オプションの不足、不正なmodeやFeature ID、余分な引数は例外になります。
 
-`run()`は入力を解析し、helpならヘルプを表示します。initはGateを実行せず、初期化の予定を表示します。それ以外はGateを実行し、許可された場合のみ後続の位置へ進みます。ただしワークフロー本体は未実装なので、許可後も終了コード2で停止します。
+`run()`は入力を解析し、helpならヘルプを表示します。initはGateを実行せず、注入されたInitializerでローカル下書きを作成します。それ以外はGateを実行し、許可された場合のみ後続の位置へ進みます。spec/design/implementのワークフロー本体は未実装なので、許可後も終了コード2で停止します。
 
-`cli.ts`は`ReviewMergeGate`と仮の`ApprovalReader`を組み立て、`run()`の戻り値をプロセスの終了コードに設定します。
+`cli.ts`は`ReviewMergeGate`と仮の`ApprovalReader`を組み立て、ローカル初期化の依存も渡し、`run()`の戻り値をプロセスの終了コードに設定します。
 
 ## 現在の処理フロー
 
@@ -217,7 +234,7 @@ flowchart TD
     B --> C[parseCommand]
     C --> D{コマンド}
     D -->|help| E[ヘルプ表示・終了コード0]
-    D -->|init| F[予定表示・未実装・終了コード2]
+    D -->|init| F[LocalInitializerで下書き生成・終了コード0]
     D -->|spec / design / implement| G[ReviewMergeGate.check]
     G --> H[ApprovalReader.read]
     H --> I{承認条件を満たすか}
@@ -241,4 +258,4 @@ flowchart TD
 
 実ワークフローでは、Gate通過後にworktree作成、承認済みコンテキストの読み込み、Spec Kit実行、検証、Draft PR提示を順に接続する予定です。これを統括するWorkflow Runnerはまだ実装していません。
 
-Designでは複数案・推奨順位・判断根拠・トレードオフをPRに提示できるようにします。initではプロジェクト情報を収集し、greenfield/brownfieldに応じたConstitutionを生成します。既存ファイルの保護、途中失敗からの復旧、再実行時の扱いは各実装時に具体化します。
+Designでは複数案・推奨順位・判断根拠・トレードオフをPRに提示できるようにします。initではローカル検出と下書き生成を実装済みです。今後、目的・制約の入力とAI/Spec Kit連携を追加します。既存ファイルの保護、途中失敗からの復旧、再実行時の扱いは各実装時に具体化します。

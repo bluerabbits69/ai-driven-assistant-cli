@@ -40,7 +40,7 @@ test('init bypasses gate; valid phases check gate; unfinished workflows never re
   assert.match(io.lines.join('\n'), /BLOCKED: not merged/);
 });
 test('built executable help, errors, and fail-closed behavior', () => {
-  for (const [args, code, pattern] of [[['--help'], 0, /dev init/], [['init', '--mode', 'brownfield'], 2, /NOT IMPLEMENTED/], [['design', '--feature', '001-test'], 1, /BLOCKED/], [['oops'], 1, /Unknown command/]]) {
+  for (const [args, code, pattern] of [[['--help'], 0, /dev init/], [['design', '--feature', '001-test'], 1, /BLOCKED/], [['oops'], 1, /Unknown command/]]) {
     const result = spawnSync(process.execPath, ['dist/cli.js', ...args], { encoding: 'utf8' });
     assert.equal(result.status, code);
     assert.match(result.stdout + result.stderr, pattern);
