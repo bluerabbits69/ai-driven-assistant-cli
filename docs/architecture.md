@@ -12,6 +12,132 @@
 | `src/ports.ts` | worktree・Spec Kit・PR連携に向けた契約とデータ型 |
 | `tests/cli.test.mjs` | 入力検証、Gate条件、フェーズ対応、実行入口の基本テスト |
 
+## クラス図と依存関係
+
+### 現在の実装
+
+`CliEntry`と`CommandFunctions`は説明用の表記です。実際にはクラスではなく、それぞれ`cli.ts`のトップレベル処理と`app.ts`の関数です。`StubApprovalReader`も名前付きクラスではなく、実行入口で作成している仮のオブジェクトを表します。
+
+```mermaid
+classDiagram
+    direction LR
+    class CliEntry {
+        <<module>>
+    }
+    class CommandFunctions {
+        <<module>>
+        parseCommand(args) Command
+        run(args, gate, output) Promise~number~
+    }
+    class WorkflowGate {
+        <<interface>>
+        check(phase, featureId) Promise~GateResult~
+    }
+    class ReviewMergeGate {
+        -ApprovalReader approvals
+        check(phase, featureId) Promise~GateResult~
+    }
+    class ApprovalReader {
+        <<interface>>
+        read(phase, featureId) Promise
+    }
+    class StubApprovalReader {
+        <<object>>
+        read() Promise
+    }
+    class ApprovalEvidence {
+        <<interface>>
+        phase
+        featureId
+        reviewed
+        merged
+        baseBranch
+        mergeCommitOnMain
+        artifactsPresent
+        artifactsMatchApproved
+    }
+    class GateResult {
+        <<type>>
+    }
+    class Output {
+        <<interface>>
+        out(message) void
+        error(message) void
+    }
+    CliEntry ..> CommandFunctions : calls run
+    CliEntry ..> ReviewMergeGate : creates
+    CliEntry ..> StubApprovalReader : creates and injects
+    CommandFunctions ..> WorkflowGate : calls check
+    CommandFunctions ..> Output : writes
+    ReviewMergeGate ..|> WorkflowGate : implements
+    ReviewMergeGate --> ApprovalReader : constructor injection
+    StubApprovalReader ..|> ApprovalReader : structurally satisfies
+    ApprovalReader ..> ApprovalEvidence : returns optional evidence
+    ReviewMergeGate ..> ApprovalEvidence : validates
+    WorkflowGate ..> GateResult : returns
+    ReviewMergeGate ..> GateResult : returns
+```
+
+点線矢印`..>`は利用、実線矢印`-->`は保持する参照、三角の矢印`..|>`はインターフェースの実装を表します。`ApprovalReader.read()`の正確な戻り値は`Promise<ApprovalEvidence | undefined>`です。
+
+`run()`は`ReviewMergeGate`を直接生成せず、`WorkflowGate`を受け取ります。`ReviewMergeGate`も具体的なGitHubクライアントではなく`ApprovalReader`を受け取ります。この2か所で依存を注入し、テスト時に差し替えられます。具体的な実装を選んで接続する責務は`cli.ts`に置いています。
+
+### 外部連携の契約（定義済み・未接続）
+
+以下は現在存在するインターフェース間の型の依存です。ワークフローからこれらを呼ぶ実装はまだありません。
+
+```mermaid
+classDiagram
+    direction LR
+    class WorkspaceManager {
+        <<interface>>
+        createFromMain(featureId, phase) Promise
+    }
+    class WorkflowPhase {
+        <<type>>
+    }
+    class SpecKitAdapter {
+        <<interface>>
+        constitution(context) Promise~void~
+        specify(featureId, workspace) Promise~void~
+        design(featureId, workspace) Promise
+        implement(featureId, workspace) Promise~void~
+    }
+    class ProjectContext {
+        <<interface>>
+        root string
+        mode ProjectMode
+    }
+    class ProjectMode {
+        <<type>>
+    }
+    class DesignProposal {
+        <<interface>>
+        title string
+        rank number
+        rationale string
+        tradeoffs string[]
+    }
+    class PullRequestPublisher {
+        <<interface>>
+        createDraft(input) Promise
+    }
+    WorkspaceManager ..> WorkflowPhase : phase argument
+    SpecKitAdapter ..> ProjectContext : constitution argument
+    ProjectContext ..> ProjectMode : mode field
+    SpecKitAdapter ..> DesignProposal : design returns list
+    PullRequestPublisher ..> DesignProposal : optional input list
+```
+
+### 拡張時に守る依存の向き
+
+- コマンド処理と今後のWorkflow Runnerはインターフェースに依存し、GitHub・Git・AIの具体的な実装は実行入口で接続する。
+- Gateは承認の判定に限定する。worktree作成やPR公開はRunnerが各契約を通じて実行し、Gateから呼び出さない。
+- 外部連携アダプターからコマンド処理やRunnerを呼び戻さない。実行順序と失敗時の扱いはRunnerに集約する。
+- 承認を確認したmainと、worktreeの作成元を同じコミットに揃える設計が必要。現在の契約にはそのコミットを引き渡す項目がないため、実接続時に拡張する。
+
+現在は`app.ts`が`ProjectMode`を`ports.ts`から、`ports.ts`が`WorkflowPhase`を`gate.ts`から型として参照しています。共有型が増えた場合は、外部連携やCLIに依存しない共通の型ファイルへの切り出しを検討します。現段階で新しい抽象クラスやRunnerを実装したわけではありません。
+
 ## クラスとインターフェース
 
 ### ReviewMergeGate（実装済みのクラス）
