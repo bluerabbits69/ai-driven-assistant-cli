@@ -181,11 +181,43 @@ initialize(root: string, mode: ProjectMode): Promise<InitResult>
 `Initializer`を実装します。現在は他のアダプターを注入せず、Node.jsのファイルシステムAPIを直接利用します。処理の順序は次のとおりです。
 
 1. 対象ルート直下の通常ファイルから既知マニフェストを検出する。シンボリックリンクは対象外。
-2. 既存の`.specify/memory/constitution.md`の有無を確認する。
+2. 対象ルートからの固定パス`.specify/memory/constitution.md`に、既存のSpec Kit Constitutionがあるかを`lstat`で確認する。ディレクトリの探索や中身の読み込みは行わない。存在しない（`ENOENT`）場合のみ「なし」とし、権限エラーなどその他の失敗は例外として停止する。結果は`state.json`の`existingConstitution`と`context.md`に記録するだけで、Gateの判定や既存ファイルの変更には使わない。
 3. 通常ファイルの`package.json`があれば、最大1 MiBまで読み込んでプロジェクト名を取得する。それ以外はディレクトリ名を使う。
 4. brownfieldでは検出したマニフェストから技術候補を下書きに反映する。greenfieldでは採用技術をTODOとして残す。
 5. 出力先を検証して`.dev-assistant/init`を新規作成し、3つの成果物を書き込む。
 6. 成功時は出力ディレクトリを`InitResult`として返す。
+
+```mermaid
+flowchart TD
+    A["initialize(root, mode)"] --> B["resolve(root)で絶対パス化"]
+    B --> C["readdir(withFileTypes)でルート直下を取得"]
+    C --> D["通常ファイルかつ既知マニフェスト名のみ抽出"]
+    D --> E{".specify/memory/constitution.md<br>をlstat"}
+    E -->|存在する| E1[existingConstitution = true]
+    E -->|ENOENT| E2[existingConstitution = false]
+    E -->|その他のエラー| X[例外で停止・何も書き込まない]
+    E1 --> F{package.jsonを検出したか}
+    E2 --> F
+    F -->|いいえ| G[ディレクトリ名をプロジェクト名にする]
+    F -->|はい| H{1 MiB以下かつ正しいJSONか}
+    H -->|いいえ| X
+    H -->|はい| I[nameがあればプロジェクト名にする]
+    G --> J{mode}
+    I --> J
+    J -->|brownfield| K[マニフェストから技術候補を作る]
+    J -->|greenfield| K2[技術候補は空・TODOのまま]
+    K --> L[3つの成果物の内容をメモリ上で組み立てる]
+    K2 --> L
+    L --> M{".dev-assistantが<br>実ディレクトリか"}
+    M -->|シンボリックリンク等| X2[例外で停止]
+    M -->|はい| N{"init/を新規作成できたか"}
+    N -->|既に存在| X2
+    N -->|はい| O["3ファイルを作成専用(wx)で書き込み"]
+    O -->|失敗| P[init/を削除して例外]
+    O -->|成功| Q["InitResult { directory } を返す"]
+```
+
+`A`から`L`までは読み取りとメモリ上の処理のみです。入力に問題がある場合は、出力先を作成する前に停止します。
 
 | 成果物 | 内容 |
 |---|---|
