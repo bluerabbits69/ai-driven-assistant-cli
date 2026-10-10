@@ -12,30 +12,41 @@
 | `src/init.ts` | ローカル初期化の契約と下書き生成 |
 | `src/ports.ts` | worktree・Spec Kit・PR連携に向けた契約とデータ型 |
 | `tests/cli.test.mjs` | 入力検証、Gate条件、フェーズ対応、実行入口の基本テスト |
+| `tests/init.test.mjs` | 別ディレクトリからのinit、既存ファイル保護、再実行・同時実行、シンボリックリンク、不正JSONのテスト |
 
 ## クラス図と依存関係
 
 ### 現在の実装
 
-`CliEntry`と`CommandFunctions`は説明用の表記です。実際にはクラスではなく、それぞれ`cli.ts`のトップレベル処理と`app.ts`の関数です。`StubApprovalReader`も名前付きクラスではなく、実行入口で作成している仮のオブジェクトを表します。
+図の`cli.ts`と`app.ts`はTypeScriptモジュールです。`app.ts`の`run()`と`parseCommand()`は公開関数であり、クラスのメソッドではありません。`StubApprovalReader`も名前付きクラスではなく、実行入口で作成している仮のオブジェクトを表します。
 
 ```mermaid
 classDiagram
     direction LR
-    class CliEntry {
+    class CliEntry["cli.ts"] {
         <<module>>
     }
-    class CommandFunctions {
+    class AppModule["app.ts"] {
         <<module>>
         parseCommand(args) Command
-        run(args, gate, output) Promise~number~
+        run(args, gate, output, initialization) Promise~number~
     }
     class Initializer {
         <<interface>>
-        initialize(root, mode) Promise
+        initialize(root, mode) Promise~InitResult~
     }
     class LocalInitializer {
-        initialize(root, mode) Promise
+        initialize(root, mode) Promise~InitResult~
+    }
+    class InitResult {
+        <<interface>>
+        directory string
+    }
+    class ProjectMode {
+        <<type>>
+    }
+    class NodeFileSystem {
+        <<module>>
     }
     class WorkflowGate {
         <<interface>>
@@ -73,13 +84,17 @@ classDiagram
         error(message) void
     }
     CliEntry ..> LocalInitializer : creates and injects
-    CommandFunctions ..> Initializer : calls initialize
+    AppModule ..> Initializer : calls initialize
     LocalInitializer ..|> Initializer : implements
-    CliEntry ..> CommandFunctions : calls run
+    Initializer ..> InitResult : returns
+    Initializer ..> ProjectMode : mode argument
+    LocalInitializer ..> InitResult : returns
+    LocalInitializer ..> NodeFileSystem : reads and writes local files
+    CliEntry ..> AppModule : calls run
     CliEntry ..> ReviewMergeGate : creates
     CliEntry ..> StubApprovalReader : creates and injects
-    CommandFunctions ..> WorkflowGate : calls check
-    CommandFunctions ..> Output : writes
+    AppModule ..> WorkflowGate : calls check
+    AppModule ..> Output : writes
     ReviewMergeGate ..|> WorkflowGate : implements
     ReviewMergeGate --> ApprovalReader : constructor injection
     StubApprovalReader ..|> ApprovalReader : structurally satisfies
@@ -91,7 +106,7 @@ classDiagram
 
 点線矢印`..>`は利用、実線矢印`-->`は保持する参照、三角の矢印`..|>`はインターフェースの実装を表します。`ApprovalReader.read()`の正確な戻り値は`Promise<ApprovalEvidence | undefined>`です。
 
-`run()`は`ReviewMergeGate`を直接生成せず、`WorkflowGate`を受け取ります。`ReviewMergeGate`も具体的なGitHubクライアントではなく`ApprovalReader`を受け取ります。この2か所で依存を注入し、テスト時に差し替えられます。具体的な実装を選んで接続する責務は`cli.ts`に置いています。
+`run()`は`ReviewMergeGate`を直接生成せず、`WorkflowGate`を受け取ります。`ReviewMergeGate`も具体的なGitHubクライアントではなく`ApprovalReader`を受け取ります。`run()`は`Initializer`も引数で受け取ります。これらの境界で依存を注入し、テスト時に差し替えられます。具体的な実装を選んで接続する責務は`cli.ts`に置いています。
 
 ### 外部連携の契約（定義済み・未接続）
 
@@ -151,11 +166,40 @@ classDiagram
 
 ## クラスとインターフェース
 
+### Initializer（インターフェース）
+
+`src/init.ts`で初期化の契約を定義します。
+
+```typescript
+initialize(root: string, mode: ProjectMode): Promise<InitResult>
+```
+
+`root`は初期化するプロジェクトのディレクトリ、`mode`は`greenfield`または`brownfield`です。`run()`は任意の第4引数として`{ initializer, root }`を受け取り、この契約を通じて初期化します。
+
 ### LocalInitializer（実装済みのクラス）
 
-`Initializer.initialize(root, mode)`を実装し、ルート直下の既知マニフェストと既存Constitutionの有無を確認して、`.dev-assistant/init`にローカル下書きを作成します。既存出力は上書きしません。AI生成・Spec Kit連携・Git操作・承認は担当しません。
+`Initializer`を実装します。現在は他のアダプターを注入せず、Node.jsのファイルシステムAPIを直接利用します。処理の順序は次のとおりです。
 
-`Initializer`と`InitResult`も`src/init.ts`で定義しています。`run()`は任意の第4引数として`{ initializer, root }`を受け取り、CLI入口では`LocalInitializer`と`process.cwd()`を渡します。注入されていない場合は従来の未実装表示と終了コード2を維持します。
+1. 対象ルート直下の通常ファイルから既知マニフェストを検出する。シンボリックリンクは対象外。
+2. 既存の`.specify/memory/constitution.md`の有無を確認する。
+3. 通常ファイルの`package.json`があれば、最大1 MiBまで読み込んでプロジェクト名を取得する。それ以外はディレクトリ名を使う。
+4. brownfieldでは検出したマニフェストから技術候補を下書きに反映する。greenfieldでは採用技術をTODOとして残す。
+5. 出力先を検証して`.dev-assistant/init`を新規作成し、3つの成果物を書き込む。
+6. 成功時は出力ディレクトリを`InitResult`として返す。
+
+| 成果物 | 内容 |
+|---|---|
+| `constitution.draft.md` | 未承認の原則候補、目的・技術・制約のTODO |
+| `context.md` | 限定的な検出結果、既存Constitutionの有無、次の作業 |
+| `state.json` | モード・プロジェクト名・検出情報・`draft`状態 |
+
+既存Constitutionは変更しません。`.dev-assistant`がシンボリックリンクの場合、または`init`が既に存在する場合は停止します。同時実行でも`init`ディレクトリを新規作成できた呼び出しだけが書き込みに進みます。書き込み失敗時は今回作成した`init`ディレクトリの削除を試み、例外を返します。親の`.dev-assistant`は残る場合があります。
+
+このクラスは限定的なローカル検出とテンプレート生成を担当します。ソースの詳細分析、AI生成、Spec Kit実行、Git/worktree操作、PR公開、承認判定は行いません。生成した`state.json`はGateの承認証拠ではありません。
+
+### InitResult（インターフェース）
+
+`{ directory: string }`で、生成した下書きの出力先を返します。`run()`はこの値を成功メッセージに使用します。承認完了やPR情報は含みません。
 
 ### ReviewMergeGate（実装済みのクラス）
 
@@ -185,7 +229,7 @@ classDiagram
 
 `createFromMain(featureId, phase)`でmainを基点に作業用worktreeとブランチを用意し、そのパスとブランチ名を返すための境界です。実装・呼び出しはまだありません。
 
-現在の`phase`型はSpecification・Design・Implementationのみです。Constitution作成のための作業領域は、init実装時に契約を拡張するか、別の入口を設ける必要があります。
+現在の`phase`型はSpecification・Design・Implementationのみです。Constitution作成のためのworktreeは、Git連携追加時に契約を拡張するか、別の入口を設ける必要があります。
 
 ### SpecKitAdapter（契約のみ）
 
@@ -212,6 +256,7 @@ classDiagram
 | `ArtifactPhase` | 承認対象となる`constitution`・`specification`・`design` |
 | `GateResult` | `{ allowed: true }`または`{ allowed: false; reason: string }` |
 | `ApprovalEvidence` | 対象フェーズ/Feature、レビュー・マージ・main上の成果物に関する判定情報 |
+| `InitResult` | ローカル下書きの出力ディレクトリ |
 | `ProjectMode` | `greenfield`または`brownfield` |
 | `ProjectContext` | プロジェクトのルートパスとモード |
 | `DesignProposal` | 案の名前、推奨順位、判断根拠、トレードオフ。順位の制約や検証は未実装 |
@@ -222,9 +267,9 @@ classDiagram
 
 `parseCommand()`は引数を検証し、`Command`を返します。不明なコマンド、必須オプションの不足、不正なmodeやFeature ID、余分な引数は例外になります。
 
-`run()`は入力を解析し、helpならヘルプを表示します。initはGateを実行せず、注入されたInitializerでローカル下書きを作成します。それ以外はGateを実行し、許可された場合のみ後続の位置へ進みます。spec/design/implementのワークフロー本体は未実装なので、許可後も終了コード2で停止します。
+`run()`は入力を解析し、helpならヘルプを表示します。initはGateを実行せず、注入されたInitializerでローカル下書きを作成し、成功時は0、例外発生時は1を返します。初期化依存が渡されていない場合は未実装として2を返します。それ以外はGateを実行し、許可された場合のみ後続の位置へ進みます。spec/design/implementのワークフロー本体は未実装なので、許可後も終了コード2で停止します。
 
-`cli.ts`は`ReviewMergeGate`と仮の`ApprovalReader`を組み立て、ローカル初期化の依存も渡し、`run()`の戻り値をプロセスの終了コードに設定します。
+`cli.ts`は`ReviewMergeGate`と仮の`ApprovalReader`を組み立て、`LocalInitializer`と`process.cwd()`を第4引数として渡し、`run()`の戻り値をプロセスの終了コードに設定します。
 
 ## 現在の処理フロー
 
@@ -234,7 +279,11 @@ flowchart TD
     B --> C[parseCommand]
     C --> D{コマンド}
     D -->|help| E[ヘルプ表示・終了コード0]
-    D -->|init| F[LocalInitializerで下書き生成・終了コード0]
+    D -->|init| L{初期化依存あり}
+    L -->|はい| F[LocalInitializerで下書き生成]
+    L -->|いいえ| M[未実装・終了コード2]
+    F -->|成功| N[出力先を表示・終了コード0]
+    F -->|例外| J
     D -->|spec / design / implement| G[ReviewMergeGate.check]
     G --> H[ApprovalReader.read]
     H --> I{承認条件を満たすか}
