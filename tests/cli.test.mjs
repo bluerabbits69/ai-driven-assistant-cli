@@ -28,16 +28,27 @@ test('missing, unreviewed, unmerged, wrong branch, absent/changed artifacts are 
   assert.equal((await new ReviewMergeGate({ read: async () => { throw new Error('offline'); } }).check('specification')).allowed, false);
   assert.equal((await new ReviewMergeGate({ read: async () => { throw new Error('must not read'); } }).check('design')).allowed, false);
 });
+const initialization = (inits = []) => ({ root: '/project', initializer: { initialize: async (...args) => { inits.push(args); return { directory: '/project/.dev-assistant/init' }; } } });
 test('init bypasses gate; valid phases check gate; unfinished workflows never report success', async () => {
-  const calls = [];
+  const calls = [], inits = [];
   const gate = { check: async (...args) => { calls.push(args); return { allowed: true }; } };
-  assert.equal(await run(['init', '--mode', 'greenfield'], gate, output()), 2);
+  const initIo = output();
+  assert.equal(await run(['init', '--mode', 'greenfield'], gate, initIo, initialization(inits)), 0);
   assert.equal(calls.length, 0);
-  for (const kind of ['spec', 'design', 'implement']) assert.equal(await run([kind, '--feature', '001-test'], gate, output()), 2);
+  assert.deepEqual(inits, [['/project', 'greenfield']]);
+  assert.match(initIo.lines.join('\n'), /draft created: \/project\/\.dev-assistant\/init/);
+  for (const kind of ['spec', 'design', 'implement']) assert.equal(await run([kind, '--feature', '001-test'], gate, output(), initialization(inits)), 2);
   assert.deepEqual(calls, [['specification', '001-test'], ['design', '001-test'], ['implementation', '001-test']]);
+  assert.equal(inits.length, 1);
   const io = output();
-  assert.equal(await run(['design', '--feature', '001-test'], { check: async () => ({ allowed: false, reason: 'not merged' }) }, io), 1);
+  assert.equal(await run(['design', '--feature', '001-test'], { check: async () => ({ allowed: false, reason: 'not merged' }) }, io, initialization()), 1);
   assert.match(io.lines.join('\n'), /BLOCKED: not merged/);
+});
+test('init failures are reported with exit code 1', async () => {
+  const io = output();
+  const failing = { root: '/project', initializer: { initialize: async () => { throw new Error('draft already exists'); } } };
+  assert.equal(await run(['init', '--mode', 'brownfield'], { check: async () => ({ allowed: true }) }, io, failing), 1);
+  assert.deepEqual(io.lines, ['draft already exists']);
 });
 test('built executable help, errors, and fail-closed behavior', () => {
   for (const [args, code, pattern] of [[['--help'], 0, /dev init/], [['design', '--feature', '001-test'], 1, /BLOCKED/], [['oops'], 1, /Unknown command/]]) {

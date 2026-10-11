@@ -174,7 +174,7 @@ classDiagram
 initialize(root: string, mode: ProjectMode): Promise<InitResult>
 ```
 
-`root`は初期化するプロジェクトのディレクトリ、`mode`は`greenfield`または`brownfield`です。`run()`は任意の第4引数として`{ initializer, root }`を受け取り、この契約を通じて初期化します。
+`root`は初期化するプロジェクトのディレクトリ、`mode`は`greenfield`または`brownfield`です。`run()`は必須の第4引数として`{ initializer, root }`を受け取り、この契約を通じて初期化します。
 
 ### LocalInitializer（実装済みのクラス）
 
@@ -299,7 +299,7 @@ flowchart TD
 
 `parseCommand()`は引数を検証し、`Command`を返します。不明なコマンド、必須オプションの不足、不正なmodeやFeature ID、余分な引数は例外になります。
 
-`run()`は入力を解析し、helpならヘルプを表示します。initはGateを実行せず、注入されたInitializerでローカル下書きを作成し、成功時は0、例外発生時は1を返します。初期化依存が渡されていない場合は未実装として2を返します。それ以外はGateを実行し、許可された場合のみ後続の位置へ進みます。spec/design/implementのワークフロー本体は未実装なので、許可後も終了コード2で停止します。
+`run()`は入力を解析し、helpならヘルプを表示します。initはGateを実行せず、注入されたInitializerでローカル下書きを作成し、成功時は0、例外発生時は1を返します。それ以外はGateを実行し、許可された場合のみ後続の位置へ進みます。spec/design/implementのワークフロー本体は未実装なので、許可後も終了コード2で停止します。
 
 `cli.ts`は`ReviewMergeGate`と仮の`ApprovalReader`を組み立て、`LocalInitializer`と`process.cwd()`を第4引数として渡し、`run()`の戻り値をプロセスの終了コードに設定します。
 
@@ -311,9 +311,7 @@ flowchart TD
     B --> C[parseCommand]
     C --> D{コマンド}
     D -->|help| E[ヘルプ表示・終了コード0]
-    D -->|init| L{初期化依存あり}
-    L -->|はい| F[LocalInitializerで下書き生成]
-    L -->|いいえ| M[未実装・終了コード2]
+    D -->|init| F[LocalInitializerで下書き生成]
     F -->|成功| N[出力先を表示・終了コード0]
     F -->|例外| J
     D -->|spec / design / implement| G[ReviewMergeGate.check]

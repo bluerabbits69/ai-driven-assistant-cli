@@ -31,23 +31,19 @@ export interface Output { out(message: string): void; error(message: string): vo
 const phases: Record<'spec' | 'design' | 'implement', WorkflowPhase> = {
   spec: 'specification', design: 'design', implement: 'implementation',
 };
-export async function run(args: string[], gate: WorkflowGate, output: Output, initialization?: { initializer: Initializer; root: string }): Promise<number> {
+export async function run(args: string[], gate: WorkflowGate, output: Output, initialization: { initializer: Initializer; root: string }): Promise<number> {
   try {
     const command = parseCommand(args);
     if (command.kind === 'help') { output.out(help); return 0; }
-    if (command.kind === 'init' && initialization) {
+    if (command.kind === 'init') {
       const result = await initialization.initializer.initialize(initialization.root, command.mode);
       output.out(`Local initialization draft created: ${result.directory}`);
       output.out('Draft only: AI/Spec Kit, worktree and PR publishing are not connected. Approval is still required.');
       return 0;
     }
-    if (command.kind !== 'init') {
-      const result = await gate.check(phases[command.kind], command.featureId);
-      if (!result.allowed) { output.error(`BLOCKED: ${result.reason}`); return 1; }
-    }
-    output.out(command.kind === 'init'
-      ? `Initialization planned (${command.mode}): project Constitution → review PR → merge into main.`
-      : `${command.kind} gate passed for ${command.featureId}.`);
+    const result = await gate.check(phases[command.kind], command.featureId);
+    if (!result.allowed) { output.error(`BLOCKED: ${result.reason}`); return 1; }
+    output.out(`${command.kind} gate passed for ${command.featureId}.`);
     output.error('NOT IMPLEMENTED: workflow adapters are not connected. No files, worktrees or PRs were created.');
     return 2;
   } catch (error) {
