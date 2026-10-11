@@ -46,3 +46,54 @@ test('process runner reports missing executable, timeout and excessive output', 
   await assert.rejects(runner.run({ ...base, executable: process.execPath, args: ['-e', 'setInterval(()=>{},1000)'], timeoutMs: 50 }), { code: 'TIMEOUT' });
   await assert.rejects(runner.run({ ...base, executable: process.execPath, args: ['-e', 'process.stdout.write("x".repeat(5*1024*1024))'] }), { code: 'OUTPUT_LIMIT' });
 });
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function grandchildScript(t) {
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'agent-tree-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const marker = join(dir, 'marker');
+  // The grandchild inherits the pipes and would create the marker after 1s if it survived.
+  const grandchild = `setTimeout(() => require('fs').writeFileSync(${JSON.stringify(marker)}, 'alive'), 1000)`;
+  const spawnGrandchild = `require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(grandchild)}], { stdio: 'inherit' });`;
+  const { existsSync } = await import('node:fs');
+  return { spawnGrandchild, survived: () => existsSync(marker) };
+}
+test('timeout returns promptly and stops descendants that hold the pipes', async t => {
+  const { spawnGrandchild, survived } = await grandchildScript(t);
+  const started = Date.now();
+  await assert.rejects(new NodeProcessRunner().run({ executable: process.execPath, args: ['-e', `${spawnGrandchild} setTimeout(() => {}, 5000)`], cwd: tmpdir(), input: '', timeoutMs: 200 }), { code: 'TIMEOUT' });
+  assert.ok(Date.now() - started < 1000, `took ${Date.now() - started}ms`);
+  await sleep(1500);
+  assert.equal(survived(), false);
+});
+test('normal exit resolves promptly even if a background descendant keeps the pipes', async t => {
+  const { spawnGrandchild, survived } = await grandchildScript(t);
+  const started = Date.now();
+  const result = await new NodeProcessRunner().run({ executable: process.execPath, args: ['-e', `${spawnGrandchild} process.stdout.write('done'); process.exit(0)`], cwd: tmpdir(), input: '', timeoutMs: 5000 });
+  assert.deepEqual([result.stdout, result.exitCode], ['done', 0]);
+  assert.ok(Date.now() - started < 1000, `took ${Date.now() - started}ms`);
+  await sleep(1500);
+  assert.equal(survived(), false);
+});
+test('SIGINT to the host process also stops the agent process group', async t => {
+  const { spawnSync } = await import('node:child_process');
+  const { pathToFileURL } = await import('node:url');
+  const { resolve } = await import('node:path');
+  const { spawnGrandchild, survived } = await grandchildScript(t);
+  const module = pathToFileURL(resolve('dist/agents/executor.js')).href;
+  const host = `import { NodeProcessRunner } from ${JSON.stringify(module)};
+    setTimeout(() => process.kill(process.pid, 'SIGINT'), 300);
+    await new NodeProcessRunner().run({ executable: process.execPath, args: ['-e', ${JSON.stringify(`${spawnGrandchild} setTimeout(() => {}, 5000)`)}], cwd: ${JSON.stringify(tmpdir())}, input: '', timeoutMs: 10000 });`;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', host], { encoding: 'utf8', timeout: 5000 });
+  assert.equal(result.signal, 'SIGINT', result.stderr);
+  await sleep(1500);
+  assert.equal(survived(), false);
+});
+test('NUL characters are rejected as INVALID_REQUEST and spawn errors stay typed', async () => {
+  for (const agent of ['codex', 'claude', 'copilot']) {
+    await assert.rejects(createAgentExecutor(agent, { run: async () => { assert.fail('must not run'); } }).execute({ workspace: tmpdir(), instruction: 'a\u0000b' }), { code: 'INVALID_REQUEST' });
+  }
+  await assert.rejects(new NodeProcessRunner().run({ executable: process.execPath, args: ['a\u0000b'], cwd: tmpdir(), input: '', timeoutMs: 3000 }), error => error instanceof AgentExecutionError && error.code === 'PROCESS_ERROR');
+});

@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 export type AgentName = 'codex' | 'claude' | 'copilot';
@@ -16,14 +16,37 @@ export class AgentExecutionError extends Error {
 export class NodeProcessRunner implements ProcessRunner {
   async run(request: ProcessRequest): Promise<ProcessResult> {
     return new Promise((resolve, reject) => {
-      const child = spawn(request.executable, request.args, { cwd: request.cwd, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
-      let stdout = '', stderr = '', bytes = 0;
-      let failure: AgentExecutionError | undefined;
-      const stop = (error: AgentExecutionError) => { failure ??= error; child.kill('SIGKILL'); };
-      const timer = setTimeout(() => stop(new AgentExecutionError('TIMEOUT', 'Agent execution timed out.')), request.timeoutMs);
+      // A separate process group lets us stop descendants too (e.g. npm/Homebrew shims that start the real CLI),
+      // which would otherwise keep the pipes open and delay 'close' past the timeout. Not supported on Windows.
+      const group = process.platform !== 'win32';
+      let child: ChildProcessWithoutNullStreams;
+      try {
+        child = spawn(request.executable, request.args, { cwd: request.cwd, shell: false, stdio: ['pipe', 'pipe', 'pipe'], detached: group });
+      } catch {
+        reject(new AgentExecutionError('PROCESS_ERROR', `Could not start ${request.executable}; check its arguments.`));
+        return;
+      }
+      let stdout = '', stderr = '', bytes = 0, settled = false;
+      const killTree = () => {
+        try { if (group && child.pid) process.kill(-child.pid, 'SIGKILL'); else child.kill('SIGKILL'); } catch { /* already exited */ }
+      };
+      // The child no longer receives terminal signals with its parent, so stop it before re-raising them.
+      const onSignal = (signal: NodeJS.Signals) => { killTree(); detach(); process.kill(process.pid, signal); };
+      const detach = () => {
+        clearTimeout(timer);
+        process.off('exit', killTree); process.off('SIGINT', onSignal); process.off('SIGTERM', onSignal);
+      };
+      const fail = (error: AgentExecutionError) => {
+        if (settled) return;
+        settled = true;
+        detach(); killTree(); child.stdout.destroy(); child.stderr.destroy();
+        reject(error);
+      };
+      const timer = setTimeout(() => fail(new AgentExecutionError('TIMEOUT', 'Agent execution timed out.')), request.timeoutMs);
+      process.once('exit', killTree); process.once('SIGINT', onSignal); process.once('SIGTERM', onSignal);
       const collect = (kind: 'stdout' | 'stderr', data: string) => {
         bytes += Buffer.byteLength(data);
-        if (bytes > 4 * 1024 * 1024) { stop(new AgentExecutionError('OUTPUT_LIMIT', 'Agent output exceeded 4 MiB.')); return; }
+        if (bytes > 4 * 1024 * 1024) { fail(new AgentExecutionError('OUTPUT_LIMIT', 'Agent output exceeded 4 MiB.')); return; }
         if (kind === 'stdout') stdout += data; else stderr += data;
       };
       child.stdout.setEncoding('utf8');
@@ -31,13 +54,16 @@ export class NodeProcessRunner implements ProcessRunner {
       child.stdout.on('data', data => collect('stdout', data));
       child.stderr.on('data', data => collect('stderr', data));
       child.on('error', error => {
-        clearTimeout(timer);
-        reject(new AgentExecutionError((error as NodeJS.ErrnoException).code === 'ENOENT' ? 'NOT_FOUND' : 'PROCESS_ERROR', `Could not start ${request.executable}; check CLI installation and workspace.`));
+        fail(new AgentExecutionError((error as NodeJS.ErrnoException).code === 'ENOENT' ? 'NOT_FOUND' : 'PROCESS_ERROR', `Could not start ${request.executable}; check CLI installation and workspace.`));
       });
-      child.stdin.on('error', error => { if ((error as NodeJS.ErrnoException).code !== 'EPIPE') stop(new AgentExecutionError('PROCESS_ERROR', 'Could not send instruction to agent.')); });
+      child.stdin.on('error', error => { if ((error as NodeJS.ErrnoException).code !== 'EPIPE') fail(new AgentExecutionError('PROCESS_ERROR', 'Could not send instruction to agent.')); });
+      // Leftover descendants would hold the pipes open after the CLI exits; stop them so 'close' can fire.
+      child.on('exit', () => { if (group) killTree(); });
       child.on('close', exitCode => {
-        clearTimeout(timer);
-        if (failure) reject(failure); else resolve({ stdout, stderr, exitCode });
+        if (settled) return;
+        settled = true;
+        detach();
+        resolve({ stdout, stderr, exitCode });
       });
       child.stdin.end(request.input);
     });
@@ -48,8 +74,9 @@ abstract class CliExecutor implements AgentExecutor {
   protected abstract invocation(instruction: string): { args: string[]; input: string };
   async execute(request: AgentRequest): Promise<AgentResult> {
     const timeoutMs = request.timeoutMs ?? 120_000;
-    if (!request.instruction.trim() || Buffer.byteLength(request.instruction) > 64 * 1024 || !isAbsolute(request.workspace) || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647) {
-      throw new AgentExecutionError('INVALID_REQUEST', 'Provide an absolute workspace, nonempty instruction (up to 64 KiB), and a valid timeout.');
+    // NUL cannot be passed in argv (spawn throws), so reject it for every agent to keep behavior consistent.
+    if (!request.instruction.trim() || request.instruction.includes('\0') || Buffer.byteLength(request.instruction) > 64 * 1024 || !isAbsolute(request.workspace) ||!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647) {
+      throw new AgentExecutionError('INVALID_REQUEST', 'Provide an absolute workspace, nonempty instruction without NUL characters (up to 64 KiB), and a valid timeout.');
     }
     try { if (!(await stat(request.workspace)).isDirectory()) throw new Error(); }
     catch { throw new AgentExecutionError('INVALID_REQUEST', 'Workspace must be an existing directory.'); }
