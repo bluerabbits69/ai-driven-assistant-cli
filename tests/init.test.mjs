@@ -110,3 +110,31 @@ test('brownfield CLI identifies invalid package.json and writes no draft', async
   assert.match(result.stderr, /package\.json is not valid JSON/);
   assert.deepEqual(await readdir(root), ['package.json']);
 });
+
+test('CLI saves normalized input in state and safely renders Markdown in both modes', async t => {
+  for (const mode of ['greenfield', 'brownfield']) {
+    const root = await project(t);
+    const purpose = '  Residents <script> & *access*\nwith care  ';
+    const constraints = ['Keep API compatibility', 'Use [Kotlin](https://example.com)'];
+    const result = spawnSync(process.execPath, [cli, 'init', '--mode', mode, '--purpose', purpose, ...constraints.flatMap(c => ['--constraint', c])], { cwd: root, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    const directory = join(root, '.dev-assistant/init');
+    const state = JSON.parse(await readFile(join(directory, 'state.json'), 'utf8'));
+    assert.equal(state.schemaVersion, 2);
+    assert.deepEqual(state.input, { purpose: purpose.trim(), constraints });
+    for (const file of ['constitution.draft.md', 'context.md']) {
+      const content = await readFile(join(directory, file), 'utf8');
+      assert.match(content, /Residents &lt;script&gt; &amp;/);
+      assert.match(content, /Keep API compatibility/);
+      assert.doesNotMatch(content, /<script>|\[Kotlin\]\(https/);
+    }
+  }
+});
+test('invalid project input fails before writing files, including direct initializer calls', async t => {
+  const root = await project(t);
+  await assert.rejects(new LocalInitializer().initialize(root, 'greenfield', { purpose: ' ' }), /must not be empty/);
+  assert.deepEqual(await readdir(root), []);
+  const result = spawnSync(process.execPath, [cli, 'init', '--mode', 'brownfield', '--constraint', ''], { cwd: root, encoding: 'utf8' });
+  assert.equal(result.status, 1);
+  assert.deepEqual(await readdir(root), []);
+});

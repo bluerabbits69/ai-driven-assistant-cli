@@ -35,7 +35,7 @@ test('init bypasses gate; valid phases check gate; unfinished workflows never re
   const initIo = output();
   assert.equal(await run(['init', '--mode', 'greenfield'], gate, initIo, initialization(inits)), 0);
   assert.equal(calls.length, 0);
-  assert.deepEqual(inits, [['/project', 'greenfield']]);
+  assert.deepEqual(inits, [['/project', 'greenfield', undefined]]);
   assert.match(initIo.lines.join('\n'), /draft created: \/project\/\.dev-assistant\/init/);
   for (const kind of ['spec', 'design', 'implement']) assert.equal(await run([kind, '--feature', '001-test'], gate, output(), initialization(inits)), 2);
   assert.deepEqual(calls, [['specification', '001-test'], ['design', '001-test'], ['implementation', '001-test']]);
@@ -55,5 +55,18 @@ test('built executable help, errors, and fail-closed behavior', () => {
     const result = spawnSync(process.execPath, ['dist/cli.js', ...args], { encoding: 'utf8' });
     assert.equal(result.status, code);
     assert.match(result.stdout + result.stderr, pattern);
+  }
+});
+
+test('init parses purpose and repeated constraints in any order', async () => {
+  const args = ['init', '--constraint', 'API compatibility', '--purpose', ' Serve residents ', '--mode', 'brownfield', '--constraint', 'Offline'];
+  assert.deepEqual(parseCommand(args), { kind: 'init', mode: 'brownfield', input: { purpose: 'Serve residents', constraints: ['API compatibility', 'Offline'] } });
+  const inits = [];
+  assert.equal(await run(args, { check: async () => { throw new Error('must not gate'); } }, output(), initialization(inits)), 0);
+  assert.deepEqual(inits[0], ['/project', 'brownfield', { purpose: 'Serve residents', constraints: ['API compatibility', 'Offline'] }]);
+});
+test('init rejects missing, empty, duplicate, unknown and oversized inputs', () => {
+  for (const extra of [['--purpose'], ['--purpose', '--constraint'], ['--purpose', '  '], ['--constraint', ''], ['--purpose', 'a', '--purpose', 'b'], ['--mode', 'brownfield'], ['--unknown', 'x'], ['--purpose', 'x'.repeat(4001)], ['--constraint', '\u0000']]) {
+    assert.throws(() => parseCommand(['init', '--mode', 'greenfield', ...extra]));
   }
 });

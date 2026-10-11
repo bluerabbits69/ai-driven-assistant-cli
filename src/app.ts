@@ -1,11 +1,11 @@
 import type { WorkflowGate, WorkflowPhase } from './gate.js';
 import type { ProjectMode } from './ports.js';
-import type { Initializer } from './init.js';
-export type Command = { kind: 'help' } | { kind: 'init'; mode: ProjectMode }
+import { validateProjectInput, type ProjectInput, type Initializer } from './init.js';
+export type Command = { kind: 'help' } | { kind: 'init'; mode: ProjectMode; input?: ProjectInput }
   | { kind: 'spec' | 'design' | 'implement'; featureId: string };
 export const help = `AI-driven development CLI (MVP skeleton)
 Usage:
-  dev init --mode greenfield|brownfield
+  dev init --mode greenfield|brownfield [--purpose <text>] [--constraint <text>]...
   dev spec --feature <id>
   dev design --feature <id>
   dev implement --feature <id>
@@ -17,11 +17,29 @@ export function parseCommand(args: string[]): Command {
   const [kind, flag, value, ...extra] = args;
   if (!['init', 'spec', 'design', 'implement'].includes(kind!)) throw new Error(`Unknown command: ${kind}`);
   if (args.length === 2 && ['--help', '-h'].includes(flag!)) return { kind: 'help' };
-  if (extra.length || args.length !== 3) throw new Error('Expected exactly one required option. See dev --help.');
   if (kind === 'init') {
-    if (flag !== '--mode' || (value !== 'greenfield' && value !== 'brownfield')) throw new Error('Use --mode greenfield|brownfield.');
-    return { kind, mode: value };
+    let mode: ProjectMode | undefined;
+    let purpose: string | undefined;
+    const constraints: string[] = [];
+    for (let index = 1; index < args.length; index += 2) {
+      const option = args[index];
+      const argument = args[index + 1];
+      if (!['--mode', '--purpose', '--constraint'].includes(option!)) throw new Error(`Unknown init option: ${option}`);
+      if (argument === undefined || argument.startsWith('--')) throw new Error(`Missing value for ${option}.`);
+      if (option === '--mode') {
+        if (mode !== undefined) throw new Error('--mode may only be specified once.');
+        if (argument !== 'greenfield' && argument !== 'brownfield') throw new Error('Use --mode greenfield|brownfield.');
+        mode = argument;
+      } else if (option === '--purpose') {
+        if (purpose !== undefined) throw new Error('--purpose may only be specified once.');
+        purpose = argument;
+      } else constraints.push(argument);
+    }
+    if (!mode) throw new Error('Use --mode greenfield|brownfield.');
+    const input = validateProjectInput({ ...(purpose !== undefined ? { purpose } : {}), constraints });
+    return { kind, mode, ...(purpose !== undefined || constraints.length ? { input } : {}) };
   }
+  if (extra.length || args.length !== 3) throw new Error('Expected exactly one required option. See dev --help.');
   if (flag !== '--feature' || !value || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)) {
     throw new Error('Use --feature with a lowercase alphanumeric/hyphen ID, e.g. 001-reservation.');
   }
@@ -36,7 +54,7 @@ export async function run(args: string[], gate: WorkflowGate, output: Output, in
     const command = parseCommand(args);
     if (command.kind === 'help') { output.out(help); return 0; }
     if (command.kind === 'init') {
-      const result = await initialization.initializer.initialize(initialization.root, command.mode);
+      const result = await initialization.initializer.initialize(initialization.root, command.mode, command.input);
       output.out(`Local initialization draft created: ${result.directory}`);
       output.out('Draft only: AI/Spec Kit, worktree and PR publishing are not connected. Approval is still required.');
       return 0;

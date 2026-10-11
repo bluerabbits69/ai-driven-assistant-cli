@@ -81,3 +81,34 @@ Gateは対象フェーズ/Featureの一致、レビュー、マージ先main、�
 ## 設計ドキュメント
 
 - [クラス・インターフェース概説](docs/architecture.md)
+
+## 目的・制約の入力
+
+`init`は任意の`--purpose`（1回）と`--constraint`（複数回）を受け取ります。対話入力はありません。modeだけの実行も維持し、未入力の項目は下書きにTODOを残します。
+
+```sh
+npm run dev -- init --mode greenfield \
+  --purpose "住民が地域イベントを探せるアプリを作る" \
+  --constraint "FlutterでiOSとAndroidを提供する" \
+  --constraint "個人情報を端末外に送らない"
+
+npm run dev -- init --mode brownfield \
+  --purpose "既存の予約アプリの運用を改善する" \
+  --constraint "既存APIと保存データの互換性を維持する"
+```
+
+値の前後の空白を除去し、空文字・4000文字超・改行とタブ以外の制御文字は拒否します。目的の重複、未知のオプション、値不足も出力前に停止します。`--option=value`形式は未対応です。
+
+目的・制約は`constitution.draft.md`と`context.md`に反映し、`state.json`の`input`にも保存します。JSONにはトリム後の入力を保持し、Markdown表示ではHTML/Markdownの記号をエスケープして改行を空白に置き換えます。新規出力の`schemaVersion`は2です。
+
+```json
+{
+  "schemaVersion": 2,
+  "input": {
+    "purpose": "住民が地域イベントを探せるアプリを作る",
+    "constraints": ["FlutterでiOSとAndroidを提供する"]
+  }
+}
+```
+
+この例はstateの一部です。目的未入力時は`purpose`を省略し、制約未入力時は`constraints: []`を保存します。既存のschemaVersion 1の下書きを自動移行・上書きする機能はありません。入力を省略してもAI/Spec Kitへの接続はまだ実行されません。

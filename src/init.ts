@@ -2,9 +2,27 @@ import { lstat, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises
 import { basename, join, resolve } from 'node:path';
 import type { ProjectMode } from './ports.js';
 
+export interface ProjectInput { purpose?: string; constraints?: string[]; }
+export function validateProjectInput(input: ProjectInput): { purpose?: string; constraints: string[] } {
+  function value(text: string, label: string): string {
+    if (!text.trim()) throw new Error(`${label} must not be empty.`);
+    if (text.length > 4000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text)) {
+      throw new Error(`${label} must be at most 4000 characters and contain no control characters.`);
+    }
+    return text.trim();
+  }
+  return {
+    ...(input.purpose !== undefined ? { purpose: value(input.purpose, 'Purpose') } : {}),
+    constraints: (input.constraints ?? []).map(item => value(item, 'Constraint')),
+  };
+}
+function markdown(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/[\r\n]+/g, ' ')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[\\`*_{}\[\]()#!|]/g, '\\$&');
+}
 export interface InitResult { directory: string; }
 export interface Initializer {
-  initialize(root: string, mode: ProjectMode): Promise<InitResult>;
+  initialize(root: string, mode: ProjectMode, input?: ProjectInput): Promise<InitResult>;
 }
 const markers: Record<string, string> = {
   'package.json': 'JavaScript/TypeScript', 'go.mod': 'Go', 'Gemfile': 'Ruby',
@@ -22,7 +40,8 @@ function text(value: string): string { return value.replace(/[\r\n`<>]/g, ' '); 
 
 /** Local drafts only. Does not grant approval or write Spec Kit's Constitution. */
 export class LocalInitializer implements Initializer {
-  async initialize(root: string, mode: ProjectMode): Promise<InitResult> {
+  async initialize(root: string, mode: ProjectMode, input: ProjectInput = {}): Promise<InitResult> {
+    const projectInput = validateProjectInput(input);
     const projectRoot = resolve(root);
     const entries = await readdir(projectRoot, { withFileTypes: true });
     const manifests = entries.filter(entry => entry.isFile() && Object.hasOwn(markers, entry.name));
@@ -42,14 +61,15 @@ export class LocalInitializer implements Initializer {
     }
     const technologies = mode === 'brownfield' ? manifests.map(entry => markers[entry.name]!) : [];
     const state = {
-      schemaVersion: 1, status: 'draft', mode, projectName: name,
+      schemaVersion: 2, input: projectInput, status: 'draft', mode, projectName: name,
       detectedManifests: manifests.map(entry => entry.name), technologies,
       existingConstitution,
     };
     const draft = `# ${text(name)} Constitution — 未承認の下書き\n\n` +
       `この文書はローカル初期化で作成したテンプレートです。AI生成・承認済み成果物ではありません。\n\n` +
-      `## プロジェクト情報\n\n- モード: ${mode}\n- 目的: TODO — 解決する課題と利用者を記入\n` +
+      `## プロジェクト情報\n\n- モード: ${mode}\n- 目的: ${projectInput.purpose ? markdown(projectInput.purpose) : 'TODO — 解決する課題と利用者を記入'}\n` +
       `- 技術: ${technologies.length ? technologies.join(', ') : 'TODO — 採用技術と制約を記入'}\n\n` +
+      `## プロジェクト固有の制約\n\n${projectInput.constraints.length ? projectInput.constraints.map(item => `- ${markdown(item)}`).join('\n') : 'TODO — 技術・運用・互換性の制約を記入'}\n\n` +
       `## 開発原則（レビュー候補）\n\n` +
       `1. 仕様・設計をレビューし、mainへのマージ後に次フェーズを開始する。\n` +
       `2. 既存のコード・設定・ユーザーデータを保護し、変更の影響を説明する。\n` +
@@ -64,6 +84,7 @@ export class LocalInitializer implements Initializer {
       `- 既存のSpec Kit Constitution: ${existingConstitution ? 'あり（変更しない）' : 'なし'}\n\n` +
       `これはルート直下の限定的な検出です。ソースコード・依存関係の詳細分析は行っていません。\n` +
       `greenfieldでは既存マニフェストを参考情報に留め、採用技術を自動決定しません。\n\n` +
+      `## 入力された目的・制約\n\n- 目的: ${projectInput.purpose ? markdown(projectInput.purpose) : '未入力'}\n${projectInput.constraints.map(item => `- 制約: ${markdown(item)}`).join('\n')}\n\n` +
       `## 次の作業\n\n1. ConstitutionのTODOを記入してレビューする。\n` +
       `2. 既存Constitutionがある場合は、それを基準に下書きを比較する。\n` +
       `3. 後続のSpec Kit・worktree・Draft PR連携で承認工程へ進む。\n\n` +

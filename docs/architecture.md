@@ -33,10 +33,15 @@ classDiagram
     }
     class Initializer {
         <<interface>>
-        initialize(root, mode) Promise~InitResult~
+        initialize(root, mode, input) Promise~InitResult~
     }
     class LocalInitializer {
-        initialize(root, mode) Promise~InitResult~
+        initialize(root, mode, input) Promise~InitResult~
+    }
+    class ProjectInput {
+        <<interface>>
+        purpose string
+        constraints string[]
     }
     class InitResult {
         <<interface>>
@@ -85,6 +90,9 @@ classDiagram
     }
     CliEntry ..> LocalInitializer : creates and injects
     AppModule ..> Initializer : calls initialize
+    AppModule ..> ProjectInput : parses and validates
+    Initializer ..> ProjectInput : optional input
+    LocalInitializer ..> ProjectInput : validates and saves
     LocalInitializer ..|> Initializer : implements
     Initializer ..> InitResult : returns
     Initializer ..> ProjectMode : mode argument
@@ -171,7 +179,7 @@ classDiagram
 `src/init.ts`で初期化の契約を定義します。
 
 ```typescript
-initialize(root: string, mode: ProjectMode): Promise<InitResult>
+initialize(root: string, mode: ProjectMode, input?: ProjectInput): Promise<InitResult>
 ```
 
 `root`は初期化するプロジェクトのディレクトリ、`mode`は`greenfield`または`brownfield`です。`run()`は必須の第4引数として`{ initializer, root }`を受け取り、この契約を通じて初期化します。
@@ -180,7 +188,7 @@ initialize(root: string, mode: ProjectMode): Promise<InitResult>
 
 `Initializer`を実装します。現在は他のアダプターを注入せず、Node.jsのファイルシステムAPIを直接利用します。処理の順序は次のとおりです。
 
-1. 対象ルート直下の通常ファイルから既知マニフェストを検出する。シンボリックリンクは対象外。
+1. 目的・制約を検証・正規化した後、対象ルート直下の通常ファイルから既知マニフェストを検出する。シンボリックリンクは対象外。
 2. 対象ルートからの固定パス`.specify/memory/constitution.md`に、既存のSpec Kit Constitutionがあるかを`lstat`で確認する。ディレクトリの探索や中身の読み込みは行わない。存在しない（`ENOENT`）場合のみ「なし」とし、権限エラーなどその他の失敗は例外として停止する。結果は`state.json`の`existingConstitution`と`context.md`に記録するだけで、Gateの判定や既存ファイルの変更には使わない。
 3. greenfieldではディレクトリ名をプロジェクト名にし、マニフェストの内容は読まない。brownfieldでは通常ファイルの`package.json`があれば最大1 MiBまで読み込んで名前を取得する。それ以外はディレクトリ名を使う。不正JSONでは`package.json is not valid JSON: ...`として停止する。
 4. brownfieldでは検出したマニフェストから技術候補を下書きに反映する。greenfieldでは採用技術をTODOとして残す。
@@ -189,7 +197,7 @@ initialize(root: string, mode: ProjectMode): Promise<InitResult>
 
 ```mermaid
 flowchart TD
-    A["initialize(root, mode)"] --> B["resolve(root)で絶対パス化"]
+    A["initialize(root, mode, input)"] --> B["resolve(root)で絶対パス化"]
     B --> C["readdir(withFileTypes)でルート直下を取得"]
     C --> D["通常ファイルかつ既知マニフェスト名のみ抽出"]
     D --> E{".specify/memory/constitution.md<br>をlstat"}
@@ -338,3 +346,22 @@ flowchart TD
 実ワークフローでは、Gate通過後にworktree作成、承認済みコンテキストの読み込み、Spec Kit実行、検証、Draft PR提示を順に接続する予定です。これを統括するWorkflow Runnerはまだ実装していません。
 
 Designでは複数案・推奨順位・判断根拠・トレードオフをPRに提示できるようにします。initではローカル検出と下書き生成を実装済みです。今後、目的・制約の入力とAI/Spec Kit連携を追加します。既存ファイルの保護、途中失敗からの復旧、再実行時の扱いは各実装時に具体化します。
+
+## 目的・制約のデータ経路
+
+`ProjectInput`は`src/init.ts`で定義する`{ purpose?: string; constraints?: string[] }`です。図のフィールドはどちらも任意です。`validateProjectInput()`は同じモジュールの公開関数で、文字列を検証・トリムし、未指定の制約を空配列に揃えます。
+
+`app.ts`の`parseCommand()`はinitの`--purpose`と反復可能な`--constraint`を解析し、入力があれば`Command.input`に保持します。`run()`は`Initializer.initialize(root, mode, input)`へ渡します。LocalInitializerも書き込み前に検証するため、直接呼ぶ場合にも同じ値の制約が適用されます。
+
+目的は下書きの目的欄、制約はプロジェクト固有の制約欄、両方はコンテキストにも反映します。`state.json`はschemaVersion 2として正規化後の値を`input`に保存します。既存出力の上書き禁止は継続します。これは将来のAI入力となるプロジェクト情報であり、承認情報ではありません。
+
+```mermaid
+flowchart LR
+    Args[目的・制約のオプション] --> Parse[app.ts: parseCommand]
+    Parse --> Cmd[Command.input]
+    Cmd --> Run[app.ts: run]
+    Run --> Init[LocalInitializer.initialize]
+    Init --> Check[validateProjectInput]
+    Check --> Draft[下書きとcontext: 表示用エスケープ]
+    Check --> State[state.json: 正規化したinput]
+```
