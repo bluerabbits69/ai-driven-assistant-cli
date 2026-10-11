@@ -66,7 +66,7 @@ test('init parses purpose and repeated constraints in any order', async () => {
   assert.deepEqual(inits[0], ['/project', 'brownfield', { purpose: 'Serve residents', constraints: ['API compatibility', 'Offline'] }]);
 });
 test('init rejects missing, empty, duplicate, unknown and oversized inputs', () => {
-  for (const extra of [['--purpose'], ['--purpose', '--constraint'], ['--purpose', '  '], ['--constraint', ''], ['--purpose', 'a', '--purpose', 'b'], ['--mode', 'brownfield'], ['--unknown', 'x'], ['--purpose', 'x'.repeat(4001)], ['--constraint', '\u0000']]) {
+  for (const extra of [['--purpose'], ['--purpose', '--constraint'], ['--purpose', '  '], ['--constraint', ''], ['--purpose', 'a', '--purpose', 'b'], ['--mode', 'brownfield'], ['--unknown', 'x'], ['--purpose', 'x'.repeat(4001)], ['--constraint', '\u0000'], ['--constraint', 'safe‮evil'], ['--purpose', 'x\u0085y'], ['--purpose', 'x y'], ['--constraint', '⁦hidden⁩']]) {
     assert.throws(() => parseCommand(['init', '--mode', 'greenfield', ...extra]));
   }
 });

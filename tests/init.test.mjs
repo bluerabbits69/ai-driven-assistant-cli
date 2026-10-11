@@ -138,3 +138,16 @@ test('invalid project input fails before writing files, including direct initial
   assert.equal(result.status, 1);
   assert.deepEqual(await readdir(root), []);
 });
+test('untrusted package.json name is escaped and stripped of hidden characters in Markdown', async t => {
+  const root = await project(t);
+  const name = '[click](https://evil.example.com) *x*‮evil\u0085\nnext';
+  await writeFile(join(root, 'package.json'), JSON.stringify({ name }));
+  const result = await new LocalInitializer().initialize(root, 'brownfield');
+  const state = JSON.parse(await readFile(join(result.directory, 'state.json'), 'utf8'));
+  assert.equal(state.projectName, name);
+  const draft = await readFile(join(result.directory, 'constitution.draft.md'), 'utf8');
+  assert.equal(draft.split('\n')[0], '# \\[click\\]\\(https://evil.example.com\\) \\*x\\* evil next Constitution — 未承認の下書き');
+  const context = await readFile(join(result.directory, 'context.md'), 'utf8');
+  assert.match(context, /- プロジェクト: \\\[click\\\]\\\(https/);
+  for (const content of [draft, context]) assert.doesNotMatch(content, /[\u0085‮]|\[click\]\(https/);
+});

@@ -97,9 +97,9 @@ npm run dev -- init --mode brownfield \
   --constraint "既存APIと保存データの互換性を維持する"
 ```
 
-値の前後の空白を除去し、空文字・4000文字超・改行とタブ以外の制御文字は拒否します。目的の重複、未知のオプション、値不足も出力前に停止します。`--option=value`形式は未対応です。
+値の前後の空白を除去し、空文字・4000文字超・改行とタブ以外の制御文字（C0/C1）・Unicodeの行/段落区切り・表示順を変える双方向制御文字は拒否します。目的の重複、未知のオプション、値不足も出力前に停止します。`--option=value`形式は未対応です。
 
-目的・制約は`constitution.draft.md`と`context.md`に反映し、`state.json`の`input`にも保存します。JSONにはトリム後の入力を保持し、Markdown表示ではHTML/Markdownの記号をエスケープして改行を空白に置き換えます。新規出力の`schemaVersion`は2です。
+目的・制約は`constitution.draft.md`と`context.md`に反映し、`state.json`の`input`にも保存します。JSONにはトリム後の入力を保持し、Markdown表示ではHTML/Markdownの記号をエスケープし、改行と上記の制御文字を空白に置き換えます。package.jsonから取得したプロジェクト名も同じ方法で表示します（`state.json`には元の値を保存します）。新規出力の`schemaVersion`は2です。
 
 ```json
 {

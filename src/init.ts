@@ -2,12 +2,15 @@ import { lstat, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises
 import { basename, join, resolve } from 'node:path';
 import type { ProjectMode } from './ports.js';
 
+// C0/C1 controls except tab/LF/CR, DEL, Unicode line separators and bidi controls that can hide text.
+const unsafeCharacters = '\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f-\\u009f\\u061c\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069';
 export interface ProjectInput { purpose?: string; constraints?: string[]; }
 export function validateProjectInput(input: ProjectInput): { purpose?: string; constraints: string[] } {
   function value(text: string, label: string): string {
     if (!text.trim()) throw new Error(`${label} must not be empty.`);
-    if (text.length > 4000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text)) {
-      throw new Error(`${label} must be at most 4000 characters and contain no control characters.`);
+    if (text.length > 4000) throw new Error(`${label} must be at most 4000 characters.`);
+    if (new RegExp(`[${unsafeCharacters}]`).test(text)) {
+      throw new Error(`${label} must not contain control or bidirectional formatting characters.`);
     }
     return text.trim();
   }
@@ -16,8 +19,9 @@ export function validateProjectInput(input: ProjectInput): { purpose?: string; c
     constraints: (input.constraints ?? []).map(item => value(item, 'Constraint')),
   };
 }
+/** Display-only rendering for any value, including untrusted manifest data that cannot be rejected. */
 function markdown(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/[\r\n]+/g, ' ')
+  return value.replace(new RegExp(`[${unsafeCharacters}\\r\\n]+`, 'g'), ' ').replace(/&/g, '&amp;')
     .replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[\\`*_{}\[\]()#!|]/g, '\\$&');
 }
 export interface InitResult { directory: string; }
@@ -36,7 +40,6 @@ function missing(error: unknown): boolean {
 async function exists(path: string): Promise<boolean> {
   try { await lstat(path); return true; } catch (error) { if (missing(error)) return false; throw error; }
 }
-function text(value: string): string { return value.replace(/[\r\n`<>]/g, ' '); }
 
 /** Local drafts only. Does not grant approval or write Spec Kit's Constitution. */
 export class LocalInitializer implements Initializer {
@@ -65,7 +68,7 @@ export class LocalInitializer implements Initializer {
       detectedManifests: manifests.map(entry => entry.name), technologies,
       existingConstitution,
     };
-    const draft = `# ${text(name)} Constitution — 未承認の下書き\n\n` +
+    const draft = `# ${markdown(name)} Constitution — 未承認の下書き\n\n` +
       `この文書はローカル初期化で作成したテンプレートです。AI生成・承認済み成果物ではありません。\n\n` +
       `## プロジェクト情報\n\n- モード: ${mode}\n- 目的: ${projectInput.purpose ? markdown(projectInput.purpose) : 'TODO — 解決する課題と利用者を記入'}\n` +
       `- 技術: ${technologies.length ? technologies.join(', ') : 'TODO — 採用技術と制約を記入'}\n\n` +
@@ -79,7 +82,7 @@ export class LocalInitializer implements Initializer {
       (mode === 'brownfield' ? `## 既存システム\n\nTODO — 現行の振る舞い、互換性、移行・ロールバック条件を確認する。\n\n` : '') +
       `## 承認\n\n未承認。目的・制約・原則を具体化し、レビュー用PRで合意する。\n`;
     const context = `# 初期化コンテキスト\n\n` +
-      `- プロジェクト: ${text(name)}\n- モード: ${mode}\n` +
+      `- プロジェクト: ${markdown(name)}\n- モード: ${mode}\n` +
       `- ルート直下の技術マニフェスト: ${manifests.map(entry => entry.name).join(', ') || 'なし'}\n` +
       `- 既存のSpec Kit Constitution: ${existingConstitution ? 'あり（変更しない）' : 'なし'}\n\n` +
       `これはルート直下の限定的な検出です。ソースコード・依存関係の詳細分析は行っていません。\n` +
