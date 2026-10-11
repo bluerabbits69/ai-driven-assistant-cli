@@ -112,3 +112,7 @@ npm run dev -- init --mode brownfield \
 ```
 
 この例はstateの一部です。目的未入力時は`purpose`を省略し、制約未入力時は`constraints: []`を保存します。既存のschemaVersion 1の下書きを自動移行・上書きする機能はありません。入力を省略してもAI/Spec Kitへの接続はまだ実行されません。
+
+## AI実行層
+
+[AgentExecutorの概説・クラス図](docs/agent-executors.md)に、3つのCLI実装と検証範囲を記載しています。現時点ではinitとSpec Kitへの接続は未実装です。

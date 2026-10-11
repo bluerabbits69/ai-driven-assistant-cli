@@ -1,6 +1,6 @@
 # CLIのクラス・インターフェース概説
 
-現時点のMVPは、2つのクラスと、CLI処理を担う関数、将来の外部連携に向けたインターフェースで構成されています。この文書は現在の実装と拡張予定を区別して説明します。
+現時点のMVPは、ローカル初期化・承認判定のクラス、AI CLIの実行層、CLI処理を担う関数、外部連携に向けたインターフェースで構成されています。この文書は現在の実装と拡張予定を区別して説明します。
 
 ## ファイル構成
 
@@ -10,6 +10,7 @@
 | `src/app.ts` | コマンドの入力検証と振り分け |
 | `src/gate.ts` | 前工程の承認を確認するための契約と共通判定 |
 | `src/init.ts` | ローカル初期化の契約と下書き生成 |
+| `src/agents/executor.ts` | AI実行の契約、3ツールのExecutor、共通プロセス実行 |
 | `src/ports.ts` | worktree・Spec Kit・PR連携に向けた契約とデータ型 |
 | `tests/cli.test.mjs` | 入力検証、Gate条件、フェーズ対応、実行入口の基本テスト |
 | `tests/init.test.mjs` | 別ディレクトリからのinit、既存ファイル保護、再実行・同時実行、シンボリックリンク、不正JSONのテスト |
@@ -115,6 +116,111 @@ classDiagram
 点線矢印`..>`は利用、実線矢印`-->`は保持する参照、三角の矢印`..|>`はインターフェースの実装を表します。`ApprovalReader.read()`の正確な戻り値は`Promise<ApprovalEvidence | undefined>`です。
 
 `run()`は`ReviewMergeGate`を直接生成せず、`WorkflowGate`を受け取ります。`ReviewMergeGate`も具体的なGitHubクライアントではなく`ApprovalReader`を受け取ります。`run()`は`Initializer`も引数で受け取ります。これらの境界で依存を注入し、テスト時に差し替えられます。具体的な実装を選んで接続する責務は`cli.ts`に置いています。
+
+### AI実行層（実装済み・CLIワークフローには未接続）
+
+以下は`src/agents/executor.ts`に存在する実装です。`cli.ts`・`LocalInitializer`・`SpecKitAdapter`からの呼び出しはまだないため、それらへの接続線は描いていません。
+
+```mermaid
+classDiagram
+    direction LR
+    class AgentFactory["createAgentExecutor()"] {
+        <<function>>
+    }
+    class AgentExecutor {
+        <<interface>>
+        execute(request) Promise~AgentResult~
+    }
+    class AgentRequest {
+        <<interface>>
+        workspace string
+        instruction string
+        timeoutMs number
+    }
+    class AgentResult {
+        <<interface>>
+        output string
+    }
+    class CliExecutor {
+        <<abstract>>
+        -string executable
+        -ProcessRunner runner
+        execute(request) Promise~AgentResult~
+        invocation(instruction)
+    }
+    class CodexExecutor
+    class ClaudeCodeExecutor
+    class CopilotExecutor
+    class ProcessRunner {
+        <<interface>>
+        run(request) Promise~ProcessResult~
+    }
+    class ProcessRequest {
+        <<interface>>
+        executable string
+        args string[]
+        cwd string
+        input string
+        timeoutMs number
+    }
+    class ProcessResult {
+        <<interface>>
+        stdout string
+        stderr string
+        exitCode number
+    }
+    class NodeProcessRunner {
+        run(request) Promise~ProcessResult~
+    }
+    class AgentExecutionError {
+        code AgentErrorCode
+    }
+    class Error
+    AgentFactory ..> CodexExecutor : creates
+    AgentFactory ..> ClaudeCodeExecutor : creates
+    AgentFactory ..> CopilotExecutor : creates
+    AgentFactory ..> AgentExecutor : returns interface
+    AgentFactory ..> NodeProcessRunner : default runner
+    CliExecutor ..|> AgentExecutor : implements
+    CodexExecutor --|> CliExecutor : extends
+    ClaudeCodeExecutor --|> CliExecutor : extends
+    CopilotExecutor --|> CliExecutor : extends
+    CliExecutor --> ProcessRunner : constructor injection
+    NodeProcessRunner ..|> ProcessRunner : implements
+    AgentExecutor ..> AgentRequest : input
+    AgentExecutor ..> AgentResult : output
+    ProcessRunner ..> ProcessRequest : input
+    ProcessRunner ..> ProcessResult : output
+    CliExecutor ..> AgentExecutionError : throws
+    NodeProcessRunner ..> AgentExecutionError : rejects
+    AgentExecutionError --|> Error : extends
+```
+
+`--|>`はクラス継承です。3つのExecutorは`CliExecutor`を継承し、共通の`execute()`を利用します。`CliExecutor`は外部へ公開していない抽象基底クラスです。`AgentRequest.timeoutMs`は任意、`ProcessResult.exitCode`は`number | null`で、図では簡略表記しています。
+
+`AgentExecutor`はAI実行の契約、`ProcessRunner`は子プロセス実行の契約です。上位処理は前者だけに依存し、テストでは後者を差し替えてツール固有の引数や失敗を検証できます。`NodeProcessRunner`はshellを介さずプロセスを起動します。詳しい制限と検証範囲は[AI実行層の概説](agent-executors.md)を参照してください。
+
+### Spec Kitとの接続予定（未実装）
+
+次の図は設計案です。`AgentBackedSpecKitAdapter`というクラスはまだ存在せず、既存の`SpecKitAdapter`インターフェースにもAgentExecutorへの依存はありません。
+
+```mermaid
+classDiagram
+    direction LR
+    class SpecKitAdapter {
+        <<interface>>
+    }
+    class PlannedAdapter["AgentBackedSpecKitAdapter（予定）"] {
+        <<planned>>
+    }
+    class AgentExecutor {
+        <<interface>>
+    }
+    PlannedAdapter ..|> SpecKitAdapter : planned implementation
+    PlannedAdapter --> AgentExecutor : planned injection
+```
+
+接続時は、Spec Kit側がコンテキストと生成指示を組み立て、`AgentExecutor`を通じて実行します。生成結果の検証・保存はワークフロー側で設計し、Executorに承認判定やPR作成を持たせません。
 
 ### 外部連携の契約（定義済み・未接続）
 
@@ -365,3 +471,7 @@ flowchart LR
     Check --> Draft[下書きとcontext: 表示用エスケープ]
     Check --> State[state.json: 正規化したinput]
 ```
+
+## AI実行層
+
+[AgentExecutorの概説・クラス図](agent-executors.md)に、3つのCLI実装と検証範囲を記載しています。現時点ではinitとSpec Kitへの接続は未実装です。
