@@ -62,10 +62,17 @@ classDiagram
 | 実装 | 実行ファイル | 主なオプション | 指示の渡し方 |
 |---|---|---|---|
 | CodexExecutor | `codex` | `exec --sandbox read-only --skip-git-repo-check --color never -` | stdin |
-| ClaudeCodeExecutor | `claude` | `--print --output-format text --tools "" --permission-mode dontAsk` | stdin |
+| ClaudeCodeExecutor | `claude` | `--print --output-format text --tools "" --permission-mode dontAsk --strict-mcp-config --setting-sources user` | stdin |
 | CopilotExecutor | `copilot` | `--prompt ... --silent --no-ask-user --available-tools view --deny-tool write --deny-tool shell` | 引数 |
 
 初期用途はテキスト生成です。書き込みの全面自動許可やsandboxの解除は行いません。Claudeは組み込みツールを無効化し、Copilotはviewのみに制限します。Codexのread-only設定も含め、これはOS全体やユーザー設定のフックまで隔離する仕組みではありません。CLIのユーザー設定・認証を引き継ぎます。
+
+workspaceは第三者のリポジトリ（brownfield）の場合があるため、workspace側の設定を信頼しません。
+
+- Claude: `--tools ""`は組み込みツールだけを無効化し、MCPサーバーや設定ファイルは読み込みます。そのため`--strict-mcp-config`を`--mcp-config`なしで指定し、ユーザー設定とworkspaceの`.mcp.json`を含むすべてのMCPサーバーを読み込みません。また`--setting-sources user`により、workspaceの`.claude/settings.json`・`.claude/settings.local.json`に含まれるフックや許可ルールを適用しません。ユーザー本人の設定（ユーザーレベルのフックを含む）と、組織の管理設定は引き続き適用されます。workspaceの`CLAUDE.md`は指示文として読み込まれる可能性があります。
+- Codex・Copilot: workspace側の設定やMCPの読み込み有無は未確認です。実接続時に同等の制限が必要か確認します。
+
+ローカルのClaude Code 2.1.285で、上記の引数の組み合わせがオプション解析を通過することを確認しています（AIへのリクエストは送っていません）。workspaceのフックが実際に実行されないことの実行時確認はしていません。
 
 デフォルトタイムアウトは120秒、stdoutとstderrの合計上限は4 MiBです。
 

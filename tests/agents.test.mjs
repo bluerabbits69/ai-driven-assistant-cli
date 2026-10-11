@@ -15,7 +15,12 @@ test('all executors use separate arguments, working directory and default timeou
     else assert.equal(call.input, prompt);
     assert.ok(!call.args.includes('--allow-all-tools'));
     assert.ok(!call.args.includes('--dangerously-bypass-approvals-and-sandbox'));
-    if (agent === 'claude') assert.equal(call.args[call.args.indexOf('--tools') + 1], '');
+    if (agent === 'claude') {
+      assert.equal(call.args[call.args.indexOf('--tools') + 1], '');
+      assert.ok(call.args.includes('--strict-mcp-config'));
+      assert.ok(!call.args.includes('--mcp-config'));
+      assert.equal(call.args[call.args.indexOf('--setting-sources') + 1], 'user');
+    }
     if (agent === 'codex') assert.equal(call.args[call.args.indexOf('--sandbox') + 1], 'read-only');
   }
 });

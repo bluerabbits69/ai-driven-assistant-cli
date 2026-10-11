@@ -96,7 +96,9 @@ export class CodexExecutor extends CliExecutor {
 export class ClaudeCodeExecutor extends CliExecutor {
   constructor(runner: ProcessRunner = new NodeProcessRunner(), executable = 'claude') { super(executable, runner); }
   protected invocation(instruction: string) {
-    return { args: ['--print', '--output-format', 'text', '--tools', '', '--permission-mode', 'dontAsk'], input: instruction };
+    // --tools "" only disables built-in tools. Skip all MCP servers, and load only the user's own settings so that
+    // hooks and permission rules committed to an untrusted workspace (.claude/settings*.json) never apply.
+    return { args: ['--print', '--output-format', 'text', '--tools', '', '--permission-mode', 'dontAsk', '--strict-mcp-config', '--setting-sources', 'user'], input: instruction };
   }
 }
 export class CopilotExecutor extends CliExecutor {
