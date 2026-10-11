@@ -38,12 +38,13 @@ brownfieldはルート直下の既知マニフェストから技術候補を検�
 **AI生成、Spec Kit実行、worktree操作、PR作成は未実装です。** ローカル生成の成功は、プロジェクト初期化全体の承認完了を意味しません。ほかのフェーズは承認情報取得アダプターが未接続のためGateで停止します。
 終了コード: 0 = ヘルプ/ローカルinit成功、1 = 入力・初期化エラー/Gate停止、2 = 未接続ワークフロー。
 
-新しいプロジェクトから試す例（CLI本体は事前にビルドしてください）:
+新しいプロジェクトから試す例（CLI本体は事前にビルドし、このリポジトリのルートから実行してください）:
 
 ```sh
-mkdir my-new-project
-cd my-new-project
-node /Users/yasukawashun/my-project/technology-hub/projects/ai-proj/ai-driven-assistant-cli/dist/cli.js init --mode greenfield
+CLI="$PWD/dist/cli.js"
+mkdir ../my-new-project
+cd ../my-new-project
+node "$CLI" init --mode greenfield
 ```
 
 ## 構成と責務
