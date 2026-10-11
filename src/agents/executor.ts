@@ -10,8 +10,19 @@ export interface ProcessResult { stdout: string; stderr: string; exitCode: numbe
 export interface ProcessRunner { run(request: ProcessRequest): Promise<ProcessResult>; }
 export type AgentErrorCode = 'INVALID_REQUEST' | 'NOT_FOUND' | 'PROCESS_ERROR' | 'TIMEOUT' | 'OUTPUT_LIMIT' | 'FAILED' | 'EMPTY_OUTPUT';
 export class AgentExecutionError extends Error {
-  constructor(public readonly code: AgentErrorCode, message: string) { super(message); this.name = 'AgentExecutionError'; }
+  /**
+   * Tail of the CLI's stderr for troubleshooting (auth errors, unsupported options). Kept out of `message` and
+   * non-enumerable, so JSON.stringify/console.error and loggers do not emit it, because it may contain tokens or
+   * paths; callers decide whether to show or log it.
+   */
+  declare public readonly diagnostics?: string;
+  constructor(public readonly code: AgentErrorCode, message: string, diagnostics?: string) {
+    super(message);
+    this.name = 'AgentExecutionError';
+    if (diagnostics) Object.defineProperty(this, 'diagnostics', { value: diagnostics, enumerable: false });
+  }
 }
+const diagnosticsTail = (stderr: string) => stderr.trim().slice(-4096) || undefined;
 /** No shell interpolation. Output is bounded and diagnostics are not automatically logged. */
 export class NodeProcessRunner implements ProcessRunner {
   async run(request: ProcessRequest): Promise<ProcessResult> {
@@ -82,8 +93,8 @@ abstract class CliExecutor implements AgentExecutor {
     catch { throw new AgentExecutionError('INVALID_REQUEST', 'Workspace must be an existing directory.'); }
     const invocation = this.invocation(request.instruction);
     const result = await this.runner.run({ executable: this.executable, ...invocation, cwd: request.workspace, timeoutMs });
-    if (result.exitCode !== 0) throw new AgentExecutionError('FAILED', `${this.executable} failed (exit ${result.exitCode ?? 'signal'}); check authentication and CLI compatibility.`);
-    if (!result.stdout.trim()) throw new AgentExecutionError('EMPTY_OUTPUT', `${this.executable} returned no output.`);
+    if (result.exitCode !== 0) throw new AgentExecutionError('FAILED', `${this.executable} failed (exit ${result.exitCode ?? 'signal'}); check authentication and CLI compatibility.`, diagnosticsTail(result.stderr));
+    if (!result.stdout.trim()) throw new AgentExecutionError('EMPTY_OUTPUT', `${this.executable} returned no output.`, diagnosticsTail(result.stderr));
     return { output: result.stdout.trim() };
   }
 }

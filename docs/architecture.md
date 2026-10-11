@@ -471,7 +471,3 @@ flowchart LR
     Check --> Draft[下書きとcontext: 表示用エスケープ]
     Check --> State[state.json: 正規化したinput]
 ```
-
-## AI実行層
-
-[AgentExecutorの概説・クラス図](agent-executors.md)に、3つのCLI実装と検証範囲を記載しています。現時点ではinitとSpec Kitへの接続は未実装です。

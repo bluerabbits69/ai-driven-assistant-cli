@@ -102,3 +102,17 @@ test('NUL characters are rejected as INVALID_REQUEST and spawn errors stay typed
   }
   await assert.rejects(new NodeProcessRunner().run({ executable: process.execPath, args: ['a\u0000b'], cwd: tmpdir(), input: '', timeoutMs: 3000 }), error => error instanceof AgentExecutionError && error.code === 'PROCESS_ERROR');
 });
+test('failures keep a bounded stderr tail in non-enumerable diagnostics', async () => {
+  const { inspect } = await import('node:util');
+  const stderr = 'x'.repeat(5000) + 'auth failed: secret-token';
+  for (const [result, code] of [[{ stdout: '', stderr, exitCode: 1 }, 'FAILED'], [{ stdout: ' ', stderr, exitCode: 0 }, 'EMPTY_OUTPUT']]) {
+    const error = await createAgentExecutor('claude', { run: async () => result }).execute({ workspace: tmpdir(), instruction: 'hello' }).catch(e => e);
+    assert.equal(error.code, code);
+    assert.equal(error.diagnostics.length, 4096);
+    assert.ok(error.diagnostics.endsWith('auth failed: secret-token'));
+    for (const rendered of [error.message, JSON.stringify(error), inspect(error)]) assert.ok(!rendered.includes('secret-token'), rendered.slice(0, 200));
+  }
+  const quiet = await createAgentExecutor('claude', { run: async () => ({ stdout: '', stderr: '  ', exitCode: 1 }) }).execute({ workspace: tmpdir(), instruction: 'hello' }).catch(e => e);
+  assert.equal(quiet.diagnostics, undefined);
+  assert.ok(!Object.hasOwn(quiet, 'diagnostics'));
+});
