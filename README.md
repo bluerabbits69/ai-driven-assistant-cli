@@ -99,7 +99,7 @@ npm run dev -- init --mode brownfield \
 
 値の前後の空白を除去し、空文字・除去後4000文字超（絵文字も1文字と数えるコードポイント単位）・改行とタブ以外の制御文字（C0/C1）・Unicodeの行/段落区切り・表示順を変える双方向制御文字は拒否します。制御文字の判定は除去前の値に対して行います。目的の重複、未知のオプション、値不足も出力前に停止します。値は`--strict`のように`--`で始まってもよく、次の引数が`--mode`・`--purpose`・`--constraint`・`--help`・`-h`のときだけ値不足とみなします。`--option=value`形式は未対応です。
 
-目的・制約は`constitution.draft.md`と`context.md`に反映し、`state.json`の`input`にも保存します。JSONにはトリム後の入力を保持し、Markdown表示ではHTML/Markdownの記号をエスケープし、改行と上記の制御文字を空白に置き換えます。package.jsonから取得したプロジェクト名も同じ方法で表示します（`state.json`には元の値を保存します）。新規出力の`schemaVersion`は2です。
+目的・制約は`constitution.draft.md`と`context.md`に反映し、`state.json`の`input`にも保存します。JSONにはトリム後の入力を保持し、Markdown表示ではHTML/Markdownの記号（取り消し線の`~`を含む）をエスケープし、改行と上記の制御文字を空白に置き換えます。値の先頭のリスト記号（`1.`・`-`・`+`）と、GFMの自動リンク（`https://`・`www.`・メールアドレス）もエスケープし、リンクや入れ子のリストとして描画されないようにします。package.jsonから取得したプロジェクト名も同じ方法で表示します（`state.json`には元の値を保存します）。新規出力の`schemaVersion`は2です。
 
 ```json
 {

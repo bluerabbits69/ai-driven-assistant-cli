@@ -25,7 +25,10 @@ export function validateProjectInput(input: ProjectInput): { purpose?: string; c
 /** Display-only rendering for any value, including untrusted manifest data that cannot be rejected. */
 function markdown(value: string): string {
   return value.replace(new RegExp(`[${unsafeCharacters}\\r\\n]+`, 'g'), ' ').replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[\\`*_{}\[\]()#!|]/g, '\\$&');
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[\\`*_{}\[\]()#!|~@]/g, '\\$&')
+    // Defuse GFM autolinks and leading list markers, which single-symbol escaping does not cover.
+    .replace(/:(?=\/\/)/g, '\\:').replace(/\b(www)\./gi, '$1\\.')
+    .replace(/^(\s*)(\d+)\./, '$1$2\\.').replace(/^(\s*)([-+])/, '$1\\$2');
 }
 export interface InitResult { directory: string; }
 export interface Initializer {
@@ -74,7 +77,7 @@ export class LocalInitializer implements Initializer {
     const draft = `# ${markdown(name)} Constitution — 未承認の下書き\n\n` +
       `この文書はローカル初期化で作成したテンプレートです。AI生成・承認済み成果物ではありません。\n\n` +
       `## プロジェクト情報\n\n- モード: ${mode}\n- 目的: ${projectInput.purpose ? markdown(projectInput.purpose) : 'TODO — 解決する課題と利用者を記入'}\n` +
-      `- 技術: ${technologies.length ? technologies.join(', ') : 'TODO — 採用技術と制約を記入'}\n\n` +
+      `- 技術: ${technologies.length ? technologies.join(', ') : 'TODO — 採用技術を記入'}\n\n` +
       `## プロジェクト固有の制約\n\n${projectInput.constraints.length ? projectInput.constraints.map(item => `- ${markdown(item)}`).join('\n') : 'TODO — 技術・運用・互換性の制約を記入'}\n\n` +
       `## 開発原則（レビュー候補）\n\n` +
       `1. 仕様・設計をレビューし、mainへのマージ後に次フェーズを開始する。\n` +
@@ -90,7 +93,7 @@ export class LocalInitializer implements Initializer {
       `- 既存のSpec Kit Constitution: ${existingConstitution ? 'あり（変更しない）' : 'なし'}\n\n` +
       `これはルート直下の限定的な検出です。ソースコード・依存関係の詳細分析は行っていません。\n` +
       `greenfieldでは既存マニフェストを参考情報に留め、採用技術を自動決定しません。\n\n` +
-      `## 入力された目的・制約\n\n- 目的: ${projectInput.purpose ? markdown(projectInput.purpose) : '未入力'}\n${projectInput.constraints.map(item => `- 制約: ${markdown(item)}`).join('\n')}\n\n` +
+      `## 入力された目的・制約\n\n- 目的: ${projectInput.purpose ? markdown(projectInput.purpose) : '未入力'}\n${projectInput.constraints.length ? projectInput.constraints.map(item => `- 制約: ${markdown(item)}`).join('\n') : '- 制約: 未入力'}\n\n` +
       `## 次の作業\n\n1. ConstitutionのTODOを記入してレビューする。\n` +
       `2. 既存Constitutionがある場合は、それを基準に下書きを比較する。\n` +
       `3. 後続のSpec Kit・worktree・Draft PR連携で承認工程へ進む。\n\n` +

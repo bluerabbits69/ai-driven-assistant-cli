@@ -146,8 +146,27 @@ test('untrusted package.json name is escaped and stripped of hidden characters i
   const state = JSON.parse(await readFile(join(result.directory, 'state.json'), 'utf8'));
   assert.equal(state.projectName, name);
   const draft = await readFile(join(result.directory, 'constitution.draft.md'), 'utf8');
-  assert.equal(draft.split('\n')[0], '# \\[click\\]\\(https://evil.example.com\\) \\*x\\* evil next Constitution — 未承認の下書き');
+  assert.equal(draft.split('\n')[0], '# \\[click\\]\\(https\\://evil.example.com\\) \\*x\\* evil next Constitution — 未承認の下書き');
   const context = await readFile(join(result.directory, 'context.md'), 'utf8');
   assert.match(context, /- プロジェクト: \\\[click\\\]\\\(https/);
   for (const content of [draft, context]) assert.doesNotMatch(content, /[\u0085‮]|\[click\]\(https/);
+});
+test('Markdown rendering defuses list markers, strikethrough and autolinks in input', async t => {
+  const root = await project(t);
+  const constraints = ['1. first', '- nested', '+ plus', '~~gone~~', 'see https://evil.example.com', 'see www.evil.example.com', 'mail me@example.com'];
+  const result = await new LocalInitializer().initialize(root, 'greenfield', { constraints });
+  const draft = await readFile(join(result.directory, 'constitution.draft.md'), 'utf8');
+  for (const line of ['- 1\\. first', '- \\- nested', '- \\+ plus', '- \\~\\~gone\\~\\~', '- see https\\://evil.example.com', '- see www\\.evil.example.com', '- mail me\\@example.com']) {
+    assert.ok(draft.split('\n').includes(line), `missing line: ${line}`);
+  }
+  const state = JSON.parse(await readFile(join(result.directory, 'state.json'), 'utf8'));
+  assert.deepEqual(state.input.constraints, constraints);
+});
+test('context lists missing purpose and constraints explicitly without blank gaps', async t => {
+  const root = await project(t);
+  const result = await new LocalInitializer().initialize(root, 'greenfield');
+  const context = await readFile(join(result.directory, 'context.md'), 'utf8');
+  assert.match(context, /## 入力された目的・制約\n\n- 目的: 未入力\n- 制約: 未入力\n\n## 次の作業/);
+  const draft = await readFile(join(result.directory, 'constitution.draft.md'), 'utf8');
+  assert.match(draft, /- 技術: TODO — 採用技術を記入\n/);
 });
