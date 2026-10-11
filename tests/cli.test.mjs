@@ -35,7 +35,7 @@ test('init bypasses gate; valid phases check gate; unfinished workflows never re
   const initIo = output();
   assert.equal(await run(['init', '--mode', 'greenfield'], gate, initIo, initialization(inits)), 0);
   assert.equal(calls.length, 0);
-  assert.deepEqual(inits, [['/project', 'greenfield']]);
+  assert.deepEqual(inits, [['/project', 'greenfield', undefined]]);
   assert.match(initIo.lines.join('\n'), /draft created: \/project\/\.dev-assistant\/init/);
   for (const kind of ['spec', 'design', 'implement']) assert.equal(await run([kind, '--feature', '001-test'], gate, output(), initialization(inits)), 2);
   assert.deepEqual(calls, [['specification', '001-test'], ['design', '001-test'], ['implementation', '001-test']]);
@@ -56,4 +56,31 @@ test('built executable help, errors, and fail-closed behavior', () => {
     assert.equal(result.status, code);
     assert.match(result.stdout + result.stderr, pattern);
   }
+});
+
+test('init parses purpose and repeated constraints in any order', async () => {
+  const args = ['init', '--constraint', 'API compatibility', '--purpose', ' Serve residents ', '--mode', 'brownfield', '--constraint', 'Offline'];
+  assert.deepEqual(parseCommand(args), { kind: 'init', mode: 'brownfield', input: { purpose: 'Serve residents', constraints: ['API compatibility', 'Offline'] } });
+  const inits = [];
+  assert.equal(await run(args, { check: async () => { throw new Error('must not gate'); } }, output(), initialization(inits)), 0);
+  assert.deepEqual(inits[0], ['/project', 'brownfield', { purpose: 'Serve residents', constraints: ['API compatibility', 'Offline'] }]);
+});
+test('init rejects missing, empty, duplicate, unknown and oversized inputs', () => {
+  for (const extra of [['--purpose'], ['--purpose', '--constraint'], ['--purpose', '  '], ['--constraint', ''], ['--purpose', 'a', '--purpose', 'b'], ['--mode', 'brownfield'], ['--unknown', 'x'], ['--purpose', 'x'.repeat(4001)], ['--constraint', '\u0000'], ['--constraint', 'safe‮evil'], ['--purpose', 'x\u0085y'], ['--purpose', 'x y'], ['--constraint', '⁦hidden⁩']]) {
+    assert.throws(() => parseCommand(['init', '--mode', 'greenfield', ...extra]));
+  }
+});
+test('init accepts values starting with -- unless they are option names', () => {
+  const base = ['init', '--mode', 'greenfield'];
+  assert.deepEqual(parseCommand([...base, '--purpose', '--strict モードで動かす', '--constraint', '--no-network']).input, { purpose: '--strict モードで動かす', constraints: ['--no-network'] });
+  for (const extra of [['--purpose', '--mode'], ['--constraint', '--purpose'], ['--purpose', '--help'], ['--constraint', '-h']]) {
+    assert.throws(() => parseCommand([...base, ...extra]), /Missing value/);
+  }
+});
+test('input length counts trimmed code points and rejects edge unsafe characters', () => {
+  const base = ['init', '--mode', 'greenfield'];
+  assert.equal(parseCommand([...base, '--purpose', `  ${'x'.repeat(4000)}  `]).input.purpose.length, 4000);
+  assert.equal([...parseCommand([...base, '--constraint', '😀'.repeat(4000)]).input.constraints[0]].length, 4000);
+  assert.throws(() => parseCommand([...base, '--purpose', '😀'.repeat(4001)]), /at most 4000 characters/);
+  assert.throws(() => parseCommand([...base, '--purpose', ' leading separator']), /control or bidirectional/);
 });

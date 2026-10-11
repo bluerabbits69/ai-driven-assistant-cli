@@ -110,3 +110,63 @@ test('brownfield CLI identifies invalid package.json and writes no draft', async
   assert.match(result.stderr, /package\.json is not valid JSON/);
   assert.deepEqual(await readdir(root), ['package.json']);
 });
+
+test('CLI saves normalized input in state and safely renders Markdown in both modes', async t => {
+  for (const mode of ['greenfield', 'brownfield']) {
+    const root = await project(t);
+    const purpose = '  Residents <script> & *access*\nwith care  ';
+    const constraints = ['Keep API compatibility', 'Use [Kotlin](https://example.com)'];
+    const result = spawnSync(process.execPath, [cli, 'init', '--mode', mode, '--purpose', purpose, ...constraints.flatMap(c => ['--constraint', c])], { cwd: root, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    const directory = join(root, '.dev-assistant/init');
+    const state = JSON.parse(await readFile(join(directory, 'state.json'), 'utf8'));
+    assert.equal(state.schemaVersion, 2);
+    assert.deepEqual(state.input, { purpose: purpose.trim(), constraints });
+    for (const file of ['constitution.draft.md', 'context.md']) {
+      const content = await readFile(join(directory, file), 'utf8');
+      assert.match(content, /Residents &lt;script&gt; &amp;/);
+      assert.match(content, /Keep API compatibility/);
+      assert.doesNotMatch(content, /<script>|\[Kotlin\]\(https/);
+    }
+  }
+});
+test('invalid project input fails before writing files, including direct initializer calls', async t => {
+  const root = await project(t);
+  await assert.rejects(new LocalInitializer().initialize(root, 'greenfield', { purpose: ' ' }), /must not be empty/);
+  assert.deepEqual(await readdir(root), []);
+  const result = spawnSync(process.execPath, [cli, 'init', '--mode', 'brownfield', '--constraint', ''], { cwd: root, encoding: 'utf8' });
+  assert.equal(result.status, 1);
+  assert.deepEqual(await readdir(root), []);
+});
+test('untrusted package.json name is escaped and stripped of hidden characters in Markdown', async t => {
+  const root = await project(t);
+  const name = '[click](https://evil.example.com) *x*‮evil\u0085\nnext';
+  await writeFile(join(root, 'package.json'), JSON.stringify({ name }));
+  const result = await new LocalInitializer().initialize(root, 'brownfield');
+  const state = JSON.parse(await readFile(join(result.directory, 'state.json'), 'utf8'));
+  assert.equal(state.projectName, name);
+  const draft = await readFile(join(result.directory, 'constitution.draft.md'), 'utf8');
+  assert.equal(draft.split('\n')[0], '# \\[click\\]\\(https\\://evil.example.com\\) \\*x\\* evil next Constitution — 未承認の下書き');
+  const context = await readFile(join(result.directory, 'context.md'), 'utf8');
+  assert.match(context, /- プロジェクト: \\\[click\\\]\\\(https/);
+  for (const content of [draft, context]) assert.doesNotMatch(content, /[\u0085‮]|\[click\]\(https/);
+});
+test('Markdown rendering defuses list markers, strikethrough and autolinks in input', async t => {
+  const root = await project(t);
+  const constraints = ['1. first', '- nested', '+ plus', '~~gone~~', 'see https://evil.example.com', 'see www.evil.example.com', 'mail me@example.com'];
+  const result = await new LocalInitializer().initialize(root, 'greenfield', { constraints });
+  const draft = await readFile(join(result.directory, 'constitution.draft.md'), 'utf8');
+  for (const line of ['- 1\\. first', '- \\- nested', '- \\+ plus', '- \\~\\~gone\\~\\~', '- see https\\://evil.example.com', '- see www\\.evil.example.com', '- mail me\\@example.com']) {
+    assert.ok(draft.split('\n').includes(line), `missing line: ${line}`);
+  }
+  const state = JSON.parse(await readFile(join(result.directory, 'state.json'), 'utf8'));
+  assert.deepEqual(state.input.constraints, constraints);
+});
+test('context lists missing purpose and constraints explicitly without blank gaps', async t => {
+  const root = await project(t);
+  const result = await new LocalInitializer().initialize(root, 'greenfield');
+  const context = await readFile(join(result.directory, 'context.md'), 'utf8');
+  assert.match(context, /## 入力された目的・制約\n\n- 目的: 未入力\n- 制約: 未入力\n\n## 次の作業/);
+  const draft = await readFile(join(result.directory, 'constitution.draft.md'), 'utf8');
+  assert.match(draft, /- 技術: TODO — 採用技術を記入\n/);
+});
