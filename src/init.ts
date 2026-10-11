@@ -25,7 +25,7 @@ export class LocalInitializer implements Initializer {
   async initialize(root: string, mode: ProjectMode): Promise<InitResult> {
     const projectRoot = resolve(root);
     const entries = await readdir(projectRoot, { withFileTypes: true });
-    const manifests = entries.filter(entry => entry.isFile() && markers[entry.name]);
+    const manifests = entries.filter(entry => entry.isFile() && Object.hasOwn(markers, entry.name));
     const existingConstitution = await exists(join(projectRoot, '.specify/memory/constitution.md'));
     let name = basename(projectRoot);
     const packageEntry = manifests.find(entry => entry.name === 'package.json');

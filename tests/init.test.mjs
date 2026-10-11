@@ -69,3 +69,22 @@ test('malformed manifest fails before creating output; symlink manifests are not
   const state = JSON.parse(await readFile(join(result.directory, 'state.json'), 'utf8'));
   assert.deepEqual(state.detectedManifests, []);
 });
+
+for (const mode of ['greenfield', 'brownfield']) {
+  test(`${mode} ignores inherited object property names and retains valid manifests`, async t => {
+    const root = await project(t);
+    for (const name of ['toString', '__proto__', 'constructor', 'hasOwnProperty', 'valueOf']) {
+      await writeFile(join(root, name), 'not a manifest');
+    }
+    await writeFile(join(root, 'go.mod'), 'module example\n');
+    const result = await new LocalInitializer().initialize(root, mode);
+    const state = JSON.parse(await readFile(join(result.directory, 'state.json'), 'utf8'));
+    assert.deepEqual(state.detectedManifests, ['go.mod']);
+    assert.deepEqual(state.technologies, mode === 'brownfield' ? ['Go'] : []);
+    const draft = await readFile(join(result.directory, 'constitution.draft.md'), 'utf8');
+    assert.doesNotMatch(draft, /\[object Object\]|native code/);
+    if (mode === 'brownfield') assert.match(draft, /- 技術: Go/);
+    const context = await readFile(join(result.directory, 'context.md'), 'utf8');
+    assert.match(context, /技術マニフェスト: go\.mod/);
+  });
+}
