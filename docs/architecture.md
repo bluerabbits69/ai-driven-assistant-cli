@@ -200,15 +200,28 @@ classDiagram
 
 `AgentExecutor`はAI実行の契約、`ProcessRunner`は子プロセス実行の契約です。上位処理は前者だけに依存し、テストでは後者を差し替えてツール固有の引数や失敗を検証できます。`NodeProcessRunner`はshellを介さずプロセスを起動します。詳しい制限と検証範囲は[AI実行層の概説](agent-executors.md)を参照してください。
 
-### Spec Kitとの接続予定（未実装）
+### Spec Kitとの接続方針（決定済み・未実装）
 
-次の図は設計案です。`AgentBackedSpecKitAdapter`というクラスはまだ存在せず、既存の`SpecKitAdapter`インターフェースにもAgentExecutorへの依存はありません。
+Spec Kitの文書は**AIにテキストとして生成させ、検証と保存はワークフローが行います**。AIにファイルを書き込ませたり、Spec Kitのコマンド（`/speckit.*`）やスクリプト・フックを実行させたりしません。
+
+理由は次のとおりです。
+
+- Gateは「承認済みの成果物がmain上に変更されずに存在すること」を判定します。どのファイルを何の内容で書いたかをCLI自身が把握している方が、承認内容との照合を設計しやすくなります。
+- Codex・Claude・Copilotは書き込み権限の仕組みが異なり、同じ強さで制限できているかを横並びで検証するのは困難です。Executorを読み取り専用に固定すれば、workspaceの設定を読み込まない制限などの安全策をそのまま維持できます。
+- Spec Kitのコマンドは自身でファイルを書き込みます。例えば`/speckit.specify`は、Spec Kitが決める`specs/<連番>-<短い名前>/`に`spec.md`やチェックリストを作成し、`.specify/feature.json`を書き込みます。`before_specify`フックが設定されていれば、ブランチの作成も行います（github/spec-kitの`main`ブランチの`templates/commands/specify.md`で確認）。これはFeature IDやworktreeをこのCLIで管理する設計と衝突します。
+
+代わりに失うのは、Spec Kitのコマンドをそのまま呼ぶ手軽さです。Spec Kitのテンプレート（`.specify/templates/`）と承認済みのコンテキストをもとに指示を組み立て、その内容をこのCLIが所定のパスへ保存します。対応するSpec Kitのバージョンは、実装時に固定します。
+
+この方針の対象はconstitution・specify・designです。implementは、複数のソースファイルの変更をどう生成し適用するかを別途決める必要があるため、未決定です。
 
 ```mermaid
 classDiagram
     direction LR
     class SpecKitAdapter {
         <<interface>>
+        constitution(context) Promise~GeneratedArtifact~
+        specify(featureId, workspace) Promise
+        design(featureId, workspace) Promise
     }
     class PlannedAdapter["AgentBackedSpecKitAdapter（予定）"] {
         <<planned>>
@@ -216,11 +229,30 @@ classDiagram
     class AgentExecutor {
         <<interface>>
     }
+    class GeneratedArtifact {
+        <<interface>>
+        path string
+        content string
+    }
+    class PlannedWriter["ArtifactWriter（予定）"] {
+        <<planned>>
+    }
+    class PlannedRunner["Workflow Runner（予定）"] {
+        <<planned>>
+    }
     PlannedAdapter ..|> SpecKitAdapter : planned implementation
-    PlannedAdapter --> AgentExecutor : planned injection
+    PlannedAdapter --> AgentExecutor : read-only text generation
+    SpecKitAdapter ..> GeneratedArtifact : returns
+    PlannedRunner ..> SpecKitAdapter : requests documents
+    PlannedRunner ..> PlannedWriter : validates and saves
+    PlannedWriter ..> GeneratedArtifact : writes
 ```
 
-接続時は、Spec Kit側がコンテキストと生成指示を組み立て、`AgentExecutor`を通じて実行します。生成結果の検証・保存はワークフロー側で設計し、Executorに承認判定やPR作成を持たせません。
+- `AgentBackedSpecKitAdapter`（予定）: テンプレートとコンテキストから指示を組み立て、読み取り専用の`AgentExecutor`で生成し、`GeneratedArtifact`として返します。ファイルは書き込みません。
+- `ArtifactWriter`（予定）: パスがフェーズごとの許可範囲（例: `.specify/memory/constitution.md`、`specs/<featureId>/`配下）に収まること、シンボリックリンクを経由しないこと、既存ファイルを無条件に上書きしないことを検証してから保存します。`LocalInitializer`と同じ保護方針です。
+- Workflow Runner（予定）: Adapterの生成とWriterの保存を順に呼び出します。Executorに承認判定やPR作成を持たせません。
+
+`AgentBackedSpecKitAdapter`・`ArtifactWriter`・Workflow Runnerはまだ存在しません。現在のコードにあるのは、`src/ports.ts`の`SpecKitAdapter`・`GeneratedArtifact`の型だけです。
 
 ### 外部連携の契約（定義済み・未接続）
 
@@ -238,10 +270,15 @@ classDiagram
     }
     class SpecKitAdapter {
         <<interface>>
-        constitution(context) Promise~void~
-        specify(featureId, workspace) Promise~void~
+        constitution(context) Promise~GeneratedArtifact~
+        specify(featureId, workspace) Promise
         design(featureId, workspace) Promise
         implement(featureId, workspace) Promise~void~
+    }
+    class GeneratedArtifact {
+        <<interface>>
+        path string
+        content string
     }
     class ProjectContext {
         <<interface>>
@@ -266,6 +303,7 @@ classDiagram
     SpecKitAdapter ..> ProjectContext : constitution argument
     ProjectContext ..> ProjectMode : mode field
     SpecKitAdapter ..> DesignProposal : design returns list
+    SpecKitAdapter ..> GeneratedArtifact : returns documents
     PullRequestPublisher ..> DesignProposal : optional input list
 ```
 
@@ -379,16 +417,16 @@ flowchart TD
 
 ### SpecKitAdapter（契約のみ）
 
-エージェントを通じてSpec Kitへ処理をつなぐ境界です。
+Spec Kitの文書をAIにテキストとして生成させる境界です。ファイルの書き込み、Spec Kitのコマンド・スクリプト・フックの実行、ブランチ作成は行いません（[接続方針](#spec-kitとの接続方針決定済み未実装)）。
 
 | メソッド | 想定する処理 | 戻り値 |
 |---|---|---|
-| `constitution(context)` | プロジェクト固有の開発原則を生成 | `Promise<void>` |
-| `specify(featureId, workspace)` | Featureの仕様を生成 | `Promise<void>` |
-| `design(featureId, workspace)` | 設計案を生成 | `Promise<DesignProposal[]>` |
-| `implement(featureId, workspace)` | 設計に基づく実装 | `Promise<void>` |
+| `constitution(context)` | プロジェクト固有の開発原則を生成 | `Promise<GeneratedArtifact>` |
+| `specify(featureId, workspace)` | Featureの仕様を生成 | `Promise<GeneratedArtifact[]>` |
+| `design(featureId, workspace)` | 設計文書と設計案を生成 | `Promise<{ artifacts: GeneratedArtifact[]; proposals: DesignProposal[] }>` |
+| `implement(featureId, workspace)` | 設計に基づく実装（方式は未決定） | `Promise<void>` |
 
-いずれも実装・呼び出しはまだありません。Spec KitのエージェントスキルをOSコマンドとして直接実行する構成ではありません。
+`GeneratedArtifact`は`{ path: string; content: string }`で、`path`はworkspaceのルートからの相対パスです。パスの検証と保存は呼び出し側（予定の`ArtifactWriter`）が行います。いずれも実装・呼び出しはまだありません。
 
 ### PullRequestPublisher（契約のみ）
 

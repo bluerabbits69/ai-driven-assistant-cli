@@ -65,7 +65,7 @@ classDiagram
 | ClaudeCodeExecutor | `claude` | `--print --output-format text --tools "" --permission-mode dontAsk --strict-mcp-config --setting-sources user` | stdin |
 | CopilotExecutor | `copilot` | `--prompt ... --silent --no-ask-user --available-tools view --deny-tool write --deny-tool shell` | 引数 |
 
-初期用途はテキスト生成です。書き込みの全面自動許可やsandboxの解除は行いません。Claudeは組み込みツールを無効化し、Copilotはviewのみに制限します。Codexのread-only設定も含め、これはOS全体やユーザー設定のフックまで隔離する仕組みではありません。CLIのユーザー設定・認証を引き継ぎます。
+用途はテキスト生成です。Spec Kitの文書もAIにテキストとして返させ、保存はワークフローが行う方針のため（[接続方針](architecture.md#spec-kitとの接続方針決定済み未実装)）、Executorは読み取り専用を前提とし、書き込み権限を付与する設定は持ちません。書き込みの全面自動許可やsandboxの解除も行いません。Claudeは組み込みツールを無効化し、Copilotはviewのみに制限します。Codexのread-only設定も含め、これはOS全体やユーザー設定のフックまで隔離する仕組みではありません。CLIのユーザー設定・認証を引き継ぎます。
 
 workspaceは第三者のリポジトリ（brownfield）の場合があるため、workspace側の設定を信頼しません。
 
