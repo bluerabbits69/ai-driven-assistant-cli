@@ -31,7 +31,7 @@ npm run dev -- implement --feature 001-reservation
 - `.dev-assistant/init/context.md`: 検出結果と次の作業。
 - `.dev-assistant/init/state.json`: スキーマバージョン、モード、検出情報、`draft`状態。承認情報ではありません。
 
-brownfieldはルート直下の既知マニフェストから技術候補を検出します。ソース分析は行いません。greenfieldは採用技術を自動決定しません。package.jsonは名前取得のため最大1 MiBまで読み込み、不正なJSONでは出力前に停止します。マニフェストのシンボリックリンクは検出対象外です。
+brownfieldはルート直下の既知マニフェストから技術候補を検出します。ソース分析は行いません。greenfieldは採用技術を自動決定しません。greenfieldではマニフェストの名前だけを検出し、package.jsonの内容は読み込まず、ディレクトリ名をプロジェクト名にします。brownfieldではpackage.jsonを名前取得のため最大1 MiBまで読み込み、不正なJSONではファイル名付きエラーで出力前に停止します。マニフェストのシンボリックリンクは検出対象外です。
 
 既存の`.specify/memory/constitution.md`は変更しません。出力先が存在すれば、再実行・同時実行は上書きせず停止します。`.dev-assistant`のシンボリックリンクは拒否します。書き込み失敗時は今回作成したinitディレクトリを削除します（削除に失敗した場合は残存内容を確認してください）。
 

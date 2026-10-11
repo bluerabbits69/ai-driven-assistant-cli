@@ -29,11 +29,15 @@ export class LocalInitializer implements Initializer {
     const existingConstitution = await exists(join(projectRoot, '.specify/memory/constitution.md'));
     let name = basename(projectRoot);
     const packageEntry = manifests.find(entry => entry.name === 'package.json');
-    if (packageEntry) {
+    if (mode === 'brownfield' && packageEntry) {
       const path = join(projectRoot, packageEntry.name);
       const info = await lstat(path);
       if (info.size > 1024 * 1024) throw new Error('package.json exceeds the 1 MiB inspection limit.');
-      const data: unknown = JSON.parse(await readFile(path, 'utf8'));
+      const content = await readFile(path, 'utf8');
+      let data: unknown;
+      try { data = JSON.parse(content); } catch (error) {
+        throw new Error(`package.json is not valid JSON: ${error instanceof Error ? error.message : 'parse failed'}`, { cause: error });
+      }
       if (typeof data === 'object' && data !== null && 'name' in data && typeof data.name === 'string') name = data.name;
     }
     const technologies = mode === 'brownfield' ? manifests.map(entry => markers[entry.name]!) : [];

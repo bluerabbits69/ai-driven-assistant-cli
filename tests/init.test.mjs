@@ -61,7 +61,7 @@ test('symlink output directories are rejected without writing outside project', 
 test('malformed manifest fails before creating output; symlink manifests are not read', async t => {
   const root = await project(t);
   await writeFile(join(root, 'package.json'), '{invalid');
-  await assert.rejects(new LocalInitializer().initialize(root, 'brownfield'), SyntaxError);
+  await assert.rejects(new LocalInitializer().initialize(root, 'brownfield'), /package\.json is not valid JSON/);
   assert.deepEqual(await readdir(root), ['package.json']);
   const other = await project(t);
   await symlink(join(root, 'package.json'), join(other, 'package.json'));
@@ -88,3 +88,25 @@ for (const mode of ['greenfield', 'brownfield']) {
     assert.match(context, /技術マニフェスト: go\.mod/);
   });
 }
+
+test('greenfield ignores invalid, oversized and valid package.json contents', async t => {
+  for (const content of ['{invalid', 'x'.repeat(1024 * 1024 + 1), JSON.stringify({ name: 'ignored-package-name' })]) {
+    const root = await project(t);
+    await writeFile(join(root, 'package.json'), content);
+    const result = spawnSync(process.execPath, [cli, 'init', '--mode', 'greenfield'], { cwd: root, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    const state = JSON.parse(await readFile(join(root, '.dev-assistant/init/state.json'), 'utf8'));
+    assert.equal(state.projectName, root.split('/').at(-1));
+    assert.deepEqual(state.detectedManifests, ['package.json']);
+    assert.deepEqual(state.technologies, []);
+    assert.equal(await readFile(join(root, 'package.json'), 'utf8'), content);
+  }
+});
+test('brownfield CLI identifies invalid package.json and writes no draft', async t => {
+  const root = await project(t);
+  await writeFile(join(root, 'package.json'), '{invalid');
+  const result = spawnSync(process.execPath, [cli, 'init', '--mode', 'brownfield'], { cwd: root, encoding: 'utf8' });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /package\.json is not valid JSON/);
+  assert.deepEqual(await readdir(root), ['package.json']);
+});

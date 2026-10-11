@@ -182,7 +182,7 @@ initialize(root: string, mode: ProjectMode): Promise<InitResult>
 
 1. 対象ルート直下の通常ファイルから既知マニフェストを検出する。シンボリックリンクは対象外。
 2. 対象ルートからの固定パス`.specify/memory/constitution.md`に、既存のSpec Kit Constitutionがあるかを`lstat`で確認する。ディレクトリの探索や中身の読み込みは行わない。存在しない（`ENOENT`）場合のみ「なし」とし、権限エラーなどその他の失敗は例外として停止する。結果は`state.json`の`existingConstitution`と`context.md`に記録するだけで、Gateの判定や既存ファイルの変更には使わない。
-3. 通常ファイルの`package.json`があれば、最大1 MiBまで読み込んでプロジェクト名を取得する。それ以外はディレクトリ名を使う。
+3. greenfieldではディレクトリ名をプロジェクト名にし、マニフェストの内容は読まない。brownfieldでは通常ファイルの`package.json`があれば最大1 MiBまで読み込んで名前を取得する。それ以外はディレクトリ名を使う。不正JSONでは`package.json is not valid JSON: ...`として停止する。
 4. brownfieldでは検出したマニフェストから技術候補を下書きに反映する。greenfieldでは採用技術をTODOとして残す。
 5. 出力先を検証して`.dev-assistant/init`を新規作成し、3つの成果物を書き込む。
 6. 成功時は出力ディレクトリを`InitResult`として返す。
@@ -196,7 +196,7 @@ flowchart TD
     E -->|存在する| E1[existingConstitution = true]
     E -->|ENOENT| E2[existingConstitution = false]
     E -->|その他のエラー| X[例外で停止・何も書き込まない]
-    E1 --> F{package.jsonを検出したか}
+    E1 --> F{brownfieldかつ<br>package.jsonを検出したか}
     E2 --> F
     F -->|いいえ| G[ディレクトリ名をプロジェクト名にする]
     F -->|はい| H{1 MiB以下かつ正しいJSONか}
