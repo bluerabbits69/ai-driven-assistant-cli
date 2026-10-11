@@ -1,0 +1,113 @@
+# AgentExecutor
+
+## 実装範囲
+
+`src/agents/executor.ts`にAI CLIの実行層を実装しています。`init`の`--agent`やSpecKitAdapterへの接続はまだありません。Constitutionの生成・保存・検証は後続ワークフローが担当します。
+
+```typescript
+interface AgentExecutor {
+  execute(request: AgentRequest): Promise<AgentResult>;
+}
+interface AgentRequest {
+  workspace: string;
+  instruction: string;
+  timeoutMs?: number;
+}
+interface AgentResult { output: string; }
+```
+
+絶対パスの既存ディレクトリ、空でない64 KiB以下の指示を受け取ります。標準出力の前後の空白を除去して返します。これは生成本文の構造検証や承認を意味しません。
+
+## クラスと依存関係
+
+```mermaid
+classDiagram
+    class AgentExecutor {
+        <<interface>>
+        execute(request) Promise~AgentResult~
+    }
+    class CliExecutor {
+        <<abstract>>
+        execute(request) Promise~AgentResult~
+        invocation(instruction)
+    }
+    class CodexExecutor
+    class ClaudeCodeExecutor
+    class CopilotExecutor
+    class ProcessRunner {
+        <<interface>>
+        run(request) Promise~ProcessResult~
+    }
+    class NodeProcessRunner
+    class AgentExecutionError
+    CliExecutor ..|> AgentExecutor
+    CodexExecutor --|> CliExecutor
+    ClaudeCodeExecutor --|> CliExecutor
+    CopilotExecutor --|> CliExecutor
+    CliExecutor --> ProcessRunner : injected
+    NodeProcessRunner ..|> ProcessRunner
+    CliExecutor ..> AgentExecutionError
+    NodeProcessRunner ..> AgentExecutionError
+```
+
+- `CliExecutor`: 内部の抽象基底クラス。入力・作業ディレクトリ・終了コード・空出力を共通検証します。
+- 各Executor: ツールごとの引数とstdinの渡し方を定義します。
+- `ProcessRunner`: プロセス実行の契約。テストでは差し替えます。
+- `NodeProcessRunner`: shellを介さずspawnし、stdout/stderrを収集します。
+- `createAgentExecutor(name)`: `codex`・`claude`・`copilot`から実装を選択します。未知の値は拒否します。
+- `AgentExecutionError`: `INVALID_REQUEST`・`NOT_FOUND`・`PROCESS_ERROR`・`TIMEOUT`・`OUTPUT_LIMIT`・`FAILED`・`EMPTY_OUTPUT`で失敗を識別します。
+
+## 実行方針
+
+| 実装 | 実行ファイル | 主なオプション | 指示の渡し方 |
+|---|---|---|---|
+| CodexExecutor | `codex` | `exec --sandbox read-only --skip-git-repo-check --color never -` | stdin |
+| ClaudeCodeExecutor | `claude` | `--print --output-format text --tools "" --permission-mode dontAsk --strict-mcp-config --setting-sources user` | stdin |
+| CopilotExecutor | `copilot` | `--prompt ... --silent --no-ask-user --available-tools view --deny-tool write --deny-tool shell` | 引数 |
+
+初期用途はテキスト生成です。書き込みの全面自動許可やsandboxの解除は行いません。Claudeは組み込みツールを無効化し、Copilotはviewのみに制限します。Codexのread-only設定も含め、これはOS全体やユーザー設定のフックまで隔離する仕組みではありません。CLIのユーザー設定・認証を引き継ぎます。
+
+workspaceは第三者のリポジトリ（brownfield）の場合があるため、workspace側の設定を信頼しません。
+
+- Claude: `--tools ""`は組み込みツールだけを無効化し、MCPサーバーや設定ファイルは読み込みます。そのため`--strict-mcp-config`を`--mcp-config`なしで指定し、ユーザー設定とworkspaceの`.mcp.json`を含むすべてのMCPサーバーを読み込みません。また`--setting-sources user`により、workspaceの`.claude/settings.json`・`.claude/settings.local.json`に含まれるフックや許可ルールを適用しません。ユーザー本人の設定（ユーザーレベルのフックを含む）と、組織の管理設定は引き続き適用されます。workspaceの`CLAUDE.md`は指示文として読み込まれる可能性があります。
+- Codex・Copilot: workspace側の設定やMCPの読み込み有無は未確認です。実接続時に同等の制限が必要か確認します。
+- Copilot: 公式リファレンスに記載された指示の渡し方は`-p`/`--prompt`の引数のみで、stdinや`--prompt=値`形式は記載されていないため、引数で渡しています。そのため指示は同じマシンの他ユーザーからプロセス一覧（`ps`など）で参照できる可能性があり、秘密情報を含む指示には使用しないでください。`-`で始まる指示がオプションとして解釈されないかは未確認です。
+
+ローカルのClaude Code 2.1.285で、上記の引数の組み合わせがオプション解析を通過することを確認しています（AIへのリクエストは送っていません）。workspaceのフックが実際に実行されないことの実行時確認はしていません。
+
+デフォルトタイムアウトは120秒、stdoutとstderrの合計上限は4 MiBです。
+
+CLIは独立したプロセスグループで起動します。npmやHomebrewのシム経由で起動されたCLI本体などの子孫プロセスも、次の場合にグループ単位でSIGKILLします。
+
+- タイムアウト・出力上限の超過・起動失敗時。子孫プロセスがパイプを保持していても終了を待たずに即座にエラーを返します。
+- CLIの終了時。バックグラウンドに残った子孫プロセスを停止し、成功時もすぐに結果を返します。
+- 実行中のホストプロセスがSIGINT（Ctrl+C）・SIGTERMを受けた場合、または終了する場合。子プロセスはターミナルからのシグナルを直接受けないため、グループを停止してから元のシグナルを再送します。
+
+`setsid`などで別のプロセスグループへ移った子孫プロセスは対象外です。Windowsではプロセスグループを使わず、直接起動した子プロセスだけを停止します。Windows固有の実行方式は未実装です。
+
+指示にNUL文字は使用できません（`INVALID_REQUEST`）。引数の不正などで起動処理が例外を投げた場合も`PROCESS_ERROR`として返します。
+
+生のstderrをエラーメッセージに自動挿入しません。`FAILED`・`EMPTY_OUTPUT`では、認証エラーなどの調査用にstderrの末尾4096文字を`AgentExecutionError.diagnostics`に保持します（stderrが空の場合は未設定）。トークンやパスを含む可能性があるため列挙不可のプロパティとし、`JSON.stringify`や`console.error`、エラーをシリアライズするロガーには出力されません。表示・記録するかは呼び出し側が判断します。未インストール、認証失敗、未対応オプションを含む非ゼロ終了は成功扱いにしません。各CLIの事前インストールとログインが必要です。
+
+## プログラムからの利用例
+
+ビルド後、Node.jsモジュールから利用できます。この実行は選択したCLIの認証でAIサービスに指示を送ります。
+
+```javascript
+import { createAgentExecutor } from './dist/agents/executor.js';
+const executor = createAgentExecutor('codex');
+const result = await executor.execute({
+  workspace: '/absolute/path/to/project',
+  instruction: '指定された目的と制約からConstitutionの下書きをMarkdownで返してください。ファイルは変更しないでください。',
+  timeoutMs: 120000,
+});
+console.log(result.output);
+```
+
+## 検証と公式仕様
+
+引数の構築と失敗処理は注入したRunnerで、stdin・UTF-8・起動失敗・タイムアウト・出力制限は実際のNode子プロセスで検証しています。AIサービスへの実接続テストは行っていません。ローカルのCodex/Claudeのヘルプを確認し、Copilotは公式仕様に基づいています。CLIのバージョン差分による未対応オプションは実接続時に確認が必要です。
+
+- [Codex非対話実行](https://developers.openai.com/codex/noninteractive)
+- [Claude Code CLI](https://code.claude.com/docs/en/cli-reference)
+- [Copilot CLIプログラム実行](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-programmatic-reference)
