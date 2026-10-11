@@ -70,3 +70,17 @@ test('init rejects missing, empty, duplicate, unknown and oversized inputs', () 
     assert.throws(() => parseCommand(['init', '--mode', 'greenfield', ...extra]));
   }
 });
+test('init accepts values starting with -- unless they are option names', () => {
+  const base = ['init', '--mode', 'greenfield'];
+  assert.deepEqual(parseCommand([...base, '--purpose', '--strict モードで動かす', '--constraint', '--no-network']).input, { purpose: '--strict モードで動かす', constraints: ['--no-network'] });
+  for (const extra of [['--purpose', '--mode'], ['--constraint', '--purpose'], ['--purpose', '--help'], ['--constraint', '-h']]) {
+    assert.throws(() => parseCommand([...base, ...extra]), /Missing value/);
+  }
+});
+test('input length counts trimmed code points and rejects edge unsafe characters', () => {
+  const base = ['init', '--mode', 'greenfield'];
+  assert.equal(parseCommand([...base, '--purpose', `  ${'x'.repeat(4000)}  `]).input.purpose.length, 4000);
+  assert.equal([...parseCommand([...base, '--constraint', '😀'.repeat(4000)]).input.constraints[0]].length, 4000);
+  assert.throws(() => parseCommand([...base, '--purpose', '😀'.repeat(4001)]), /at most 4000 characters/);
+  assert.throws(() => parseCommand([...base, '--purpose', ' leading separator']), /control or bidirectional/);
+});

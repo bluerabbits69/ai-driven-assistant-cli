@@ -21,11 +21,13 @@ export function parseCommand(args: string[]): Command {
     let mode: ProjectMode | undefined;
     let purpose: string | undefined;
     const constraints: string[] = [];
+    const options = ['--mode', '--purpose', '--constraint'];
     for (let index = 1; index < args.length; index += 2) {
       const option = args[index];
       const argument = args[index + 1];
-      if (!['--mode', '--purpose', '--constraint'].includes(option!)) throw new Error(`Unknown init option: ${option}`);
-      if (argument === undefined || argument.startsWith('--')) throw new Error(`Missing value for ${option}.`);
+      if (!options.includes(option!)) throw new Error(`Unknown init option: ${option}`);
+      // Values may start with "--" (e.g. "--strict mode"); only a following option name means the value was omitted.
+      if (argument === undefined || [...options, '--help', '-h'].includes(argument)) throw new Error(`Missing value for ${option}.`);
       if (option === '--mode') {
         if (mode !== undefined) throw new Error('--mode may only be specified once.');
         if (argument !== 'greenfield' && argument !== 'brownfield') throw new Error('Use --mode greenfield|brownfield.');

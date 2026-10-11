@@ -7,12 +7,15 @@ const unsafeCharacters = '\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f-\\
 export interface ProjectInput { purpose?: string; constraints?: string[]; }
 export function validateProjectInput(input: ProjectInput): { purpose?: string; constraints: string[] } {
   function value(text: string, label: string): string {
-    if (!text.trim()) throw new Error(`${label} must not be empty.`);
-    if (text.length > 4000) throw new Error(`${label} must be at most 4000 characters.`);
+    const trimmed = text.trim();
+    if (!trimmed) throw new Error(`${label} must not be empty.`);
+    // Check the raw value so unsafe characters are rejected rather than silently trimmed.
     if (new RegExp(`[${unsafeCharacters}]`).test(text)) {
       throw new Error(`${label} must not contain control or bidirectional formatting characters.`);
     }
-    return text.trim();
+    // Count code points, not UTF-16 units, so emoji and other astral characters count as one.
+    if ([...trimmed].length > 4000) throw new Error(`${label} must be at most 4000 characters.`);
+    return trimmed;
   }
   return {
     ...(input.purpose !== undefined ? { purpose: value(input.purpose, 'Purpose') } : {}),
